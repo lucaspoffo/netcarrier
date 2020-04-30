@@ -1,0 +1,22 @@
+[package]
+name = "netcarrier"
+version = "0.1.0"
+authors = ["Lucas Poffo <lucas.poffo@magrathealabs.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+shipyard = "0.3.3"
+serde = { version = "1.0.104", features = ["derive"] }
+bincode = "1.2.1"
+laminar = "0.3.2"
+piston_window = "0.107.0"
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
