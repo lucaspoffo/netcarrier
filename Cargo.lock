@@ -1300,26 +1300,14 @@ dependencies = [
 
 [[package]]
 name = "shipyard"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2876f2cd4d96920b1317400a58ab9fe8cd3d86b4cceeda8cfed51567d31ee42e"
+checksum = "d67a1a36a43057eaa154b81e956509df80f0e70263eb308150d697d5d7bc83bb"
 dependencies = [
  "hashbrown",
  "num_cpus",
  "parking_lot 0.10.0",
  "rayon",
- "shipyard_proc",
-]
-
-[[package]]
-name = "shipyard_proc"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e016cd411edaa47c68a03482bebfa7e55106dabf3b474a359f551abd8673f42e"
-dependencies = [
- "proc-macro2 1.0.10",
- "quote 1.0.3",
- "syn",
 ]
 
 [[package]]

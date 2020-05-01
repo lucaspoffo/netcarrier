@@ -6,8 +6,7 @@ extern crate piston_window;
 
 use piston_window::*;
 use laminar::{ErrorKind, Packet, Socket, SocketEvent, Config};
-use shipyard::prelude::*;
-use shipyard::EntityId;
+use shipyard::*;
 
 use netcarrier::{Game, NetworkState, Position, NetworkIdentifier, ClientState};
 
@@ -42,14 +41,14 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
     while let Some(event) = window.next() {
         window.draw_2d(&event, |context, graphics, _device| {
             clear([1.0; 4], graphics);
-            let (positions, rectangles) = game.world.borrow::<(&Position, &Rectangle)>();
-            
-            (&positions, &rectangles).iter().for_each(|(pos, rec)| {
-                rectangle([1.0, 0.0, 0.0, 1.0], // red
-                          [pos.x as f64, pos.y as f64, rec.width as f64, rec.height as f64],
-                          context.transform,
-                          graphics);
-            });
+            game.world.run(|positions: View<Position>, rectangles: View<Rectangle>| {
+                (&positions, &rectangles).iter().for_each(|(pos, rec)| {
+                    rectangle([1.0, 0.0, 0.0, 1.0], // red
+                              [pos.x as f64, pos.y as f64, rec.width as f64, rec.height as f64],
+                              context.transform,
+                              graphics);
+                });
+            })    
         });
 
 		let start = time::Instant::now();
@@ -107,16 +106,16 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
 }
 
 fn run(world: &World, net_state: &NetworkState, net_id_mapping: &mut HashMap<usize, EntityId>) {
-	let (mut entities, mut positions) = world.borrow::<(EntitiesMut, &mut Position)>();
-	let mut rectangles = world.borrow::<&mut Rectangle>();
-	for (pos, net_id) in &net_state.positions {
-		if let Some(&id) = net_id_mapping.get(net_id) {
-			positions[id] = *pos;
-		} else {
-			let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(100.0, 100.0)));
-			net_id_mapping.insert(*net_id, entity);
-		}
-	}
+    world.run(|mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut rectangles: ViewMut<Rectangle>| {
+        for (pos, net_id) in &net_state.positions {
+            if let Some(&id) = net_id_mapping.get(net_id) {
+                positions[id] = *pos;
+            } else {
+                let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(100.0, 100.0)));
+                net_id_mapping.insert(*net_id, entity);
+            }
+        }
+    });
 }
 
 fn main() -> Result<(), laminar::ErrorKind> {    

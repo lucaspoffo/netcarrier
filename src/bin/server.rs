@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 use laminar::{ErrorKind, Packet, Socket, SocketEvent};
-use shipyard::prelude::*;
+use shipyard::*;
 
 use netcarrier::{Game, Position, Velocity, NetworkIdentifier, ClientState};
 
@@ -45,7 +45,7 @@ pub fn init() -> Result<(), ErrorKind> {
                         // println!("Received {:?} from {:?}", decoded, ip);
                         // clone_players_state.lock().unwrap().insert(packet.addr(), decoded);
                         if let Ok(decoded) = bincode::deserialize::<ClientState>(msg) {
-                            println!("Received {:?} from {:?}", decoded, ip);
+                            // println!("Received {:?} from {:?}", decoded, ip);
                             clone_players_state.lock().unwrap().insert(packet.addr(), decoded);
                         }
                     }
@@ -81,11 +81,11 @@ pub fn init() -> Result<(), ErrorKind> {
         {
             let mut ca = clients_added.lock().unwrap();
             if ca.len() > 0 {
-                game.world.run::<(EntitiesMut, &mut Position, &mut Velocity, &mut NetworkIdentifier, &mut ClientController), _, _>(|(mut entities, mut positions, mut velocities, mut net_identifiers, mut client_controllers)| {
+                game.world.run(|mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut net_ids: ViewMut<NetworkIdentifier>, mut client_controllers: ViewMut<ClientController>, mut velocities: ViewMut<Velocity>| {
                     for c in ca.iter() {
                         let net_id = NetworkIdentifier::new();
                         entities.add_entity(
-                            (&mut positions, &mut velocities, &mut net_identifiers, &mut client_controllers),
+                            (&mut positions, &mut velocities, &mut net_ids, &mut client_controllers),
                             (Position::new(100.0, 100.0), Velocity::new(0.0, 0.0), net_id, ClientController::new(c.clone()))
                         );
                     }
@@ -94,16 +94,15 @@ pub fn init() -> Result<(), ErrorKind> {
             }
         }
         
-        game.world.run::<(EntitiesMut, &mut ClientController), _, _>(|(mut entities, mut client_controllers)| {
-            (&mut client_controllers).iter().for_each(|controller| {
+        game.world.run(|mut client_controllers: ViewMut<ClientController>| {
+            for controller in (&mut client_controllers).iter() {
                 if let Some(state) = current_players_state.get(&controller.addr) {
                     controller.state = state.clone(); 
                 }
-            });
+            }
         });
-        
-        game.world.run_system::<UpdatePlayer>();
-        game.world.run_system::<Move>();
+        game.world.run(system_update_player);
+        game.world.run(system_move);
         // game.update();
         
         // println!("spawn time: {:?}", spawn_time);
@@ -123,9 +122,9 @@ pub fn init() -> Result<(), ErrorKind> {
         let encoded: Vec<u8> = game.encoded();
         
         let c = clients.lock().unwrap();
-        println!("clients: {}", c.len());
+        // println!("clients: {}", c.len());
         for client in &*c {
-            println!("sending for {}", client);
+            // println!("sending for {}", client);
             sender.send(Packet::reliable_unordered(*client, encoded.clone())).expect("This should send");
         }
 
@@ -140,22 +139,18 @@ pub fn init() -> Result<(), ErrorKind> {
     Ok(())
 }
 
-#[system(Move)]
-fn run(mut pos: &mut Position, vel: &Velocity) {
-    (&mut pos, &vel).iter()
-        .for_each(|(pos, vel)| {
-            pos.x += vel.dx * 10.0;
-            pos.y += vel.dy * 10.0;
-        });
+fn system_move(mut posisitons: ViewMut<Position>, velocities: View<Velocity>) {
+    for (pos, vel) in (&mut posisitons, &velocities).iter() {
+        pos.x += vel.dx * 10.0;
+        pos.y += vel.dy * 10.0;
+    }
 }
 
-#[system(UpdatePlayer)]
-fn run(controller: &ClientController, mut vel: &mut Velocity) {
-    (&controller, &mut vel).iter()
-        .for_each(|(controller, vel)| {
-            vel.dx = (controller.state.right as i32 - controller.state.left as i32) as f32;
-            vel.dy = (controller.state.down as i32 - controller.state.up as i32) as f32;
-        });
+fn system_update_player(controllers: View<ClientController>, mut velocities: ViewMut<Velocity>) {
+    for (controller, velocity) in (&controllers, &mut velocities).iter() {
+        velocity.dx = (controller.state.right as i32 - controller.state.left as i32) as f32;
+        velocity.dy = (controller.state.down as i32 - controller.state.up as i32) as f32;
+    }
 }
 
 fn main() -> Result<(), laminar::ErrorKind> {    

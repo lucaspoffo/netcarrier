@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt;
 
-use shipyard::prelude::*;
+use shipyard::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -62,26 +62,9 @@ impl Game {
 
 	pub fn new() -> Game {
 		let world = World::default();
-		let mut added = vec![];
-		world.run::<(EntitiesMut, &mut Position, &mut Velocity, &mut NetworkIdentifier), _, _>(|(mut entities, mut positions, mut velocities, mut net_identifiers)| {
-			(0..5).for_each(|_| {
-				let net_id = NetworkIdentifier::new();
-				entities.add_entity(
-					(&mut positions, &mut velocities, &mut net_identifiers),
-					(Position::new(0.0, 0.0), Velocity::new(1.0, 1.0), net_id)
-				);
-				added.push(net_id.id);
-			});
+		world.run(init_world);
 
-			(0..5).for_each(|_| {
-				entities.add_entity(
-					(&mut positions, &mut velocities),
-					(Position::new(0.0, 0.0), Velocity::new(1.0, 1.0))
-				);
-			});
-		});
-
-		Game { world, added: added.clone(), removed: vec![] }
+		Game { world, added: vec![], removed: vec![] }
 	}
 	  
 	pub fn encoded(&mut self) -> Vec<u8> {
@@ -101,28 +84,35 @@ impl Game {
 	}
 }
 
+fn init_world(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut velocities: ViewMut<Velocity>, mut net_ids: ViewMut<NetworkIdentifier>) {
+	(0..5).for_each(|_| {
+		let net_id = NetworkIdentifier::new();
+		entities.add_entity(
+			(&mut positions, &mut velocities, &mut net_ids),
+			(Position::new(0.0, 0.0), Velocity::new(1.0, 1.0), net_id)
+		);
+	});
+}
+
 pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(world: &World) -> Vec<(T, usize)> {
     let mut state: Vec<(T, usize)> = vec![];
-    world.run::<(&T, &NetworkIdentifier), _, _>(|(storage, net_identifiers)| {
-        (&storage, &net_identifiers).iter().for_each(|(component, net_identifier)| {
-            // println!("{:?}, {:?}", component, net_identifier);
-            state.push((*component, net_identifier.id));
-			// println!("{:?}", state);
+    world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
+			for (component, net_id) in (&storage, &net_ids).iter() {
+        state.push((*component, net_id.id));
+    	}
 		});
-	});
-	state
+		state
 }
 
 pub fn encoded<T: 'static + Sync + Send + fmt::Debug + Clone + Serialize>(world: &World) -> Vec<u8> {
     let mut encoded: Vec<u8> = vec![];
-    world.run::<(&T, &NetworkIdentifier), _, _>(|(storage, net_identifiers)| {
-        let mut state: Vec<(&T, usize)> = vec![];
-        (&storage, &net_identifiers).iter().for_each(|(component, net_identifier)| {
-            // println!("{:?}, {:?}", component, net_identifier);
-            state.push((component, net_identifier.id));
-        });
-        encoded = bincode::serialize(&state).unwrap();
-    });
+    world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
+			let mut state: Vec<(&T, usize)> = vec![];
+			for (component, net_id) in (&storage, &net_ids).iter() {
+        state.push((component, net_id.id));
+			}
+			encoded = bincode::serialize(&state).unwrap();
+		});
     encoded
 }
 
