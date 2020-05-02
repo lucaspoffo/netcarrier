@@ -1,6 +1,7 @@
 use std::time::{self, Instant, Duration};
 use std::collections::HashMap;
 use std::env;
+use std::net::SocketAddr;
 
 extern crate piston_window;
 
@@ -9,28 +10,26 @@ use laminar::{ErrorKind, Packet, Socket, SocketEvent, Config};
 use shipyard::*;
 
 use netcarrier::{Game, NetworkState, Position, NetworkIdentifier, ClientState};
+use netcarrier::transport::{self, TransportResource, Message, EventQueue, NetworkEvent};
 
 const SERVER: &str = "127.0.0.1:12351";
 
+struct NetIdMapping(HashMap<usize, EntityId>);
+
 #[allow(unreachable_code)]
 pub fn init(addr: &str) -> Result<(), ErrorKind> {
-	let mut config = Config::default();
-	config.heartbeat_interval = Some(Duration::from_secs(1));
-    let mut socket = Socket::bind_with_config(addr, config)?;
+	// let mut config = Config::default();
+	// config.heartbeat_interval = Some(Duration::from_secs(1));
     println!("Connected on {}", addr);
-	
-	let mut net_id_mapping: HashMap<usize, EntityId> = HashMap::new();
-
-    let game = Game::new_empty();
-
-    let server = SERVER.parse().unwrap();
-
+    
+	let mut net_id_mapping = NetIdMapping(HashMap::new());
+    
+    let mut game = Game::new_empty();
+    game.world.add_unique(net_id_mapping);
+    transport::init_client_network(&mut game.world, addr, SERVER)?;
+    let server: SocketAddr = SERVER.parse().unwrap();
+    
     let mut client_state = ClientState::default();
-
-    socket.send(Packet::reliable_unordered(
-        server,
-        "connect".as_bytes().to_vec(),
-    ))?;
 
     let mut window: PistonWindow =
         WindowSettings::new("Hello Piston!", [640, 480])
@@ -50,8 +49,6 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
                 });
             })    
         });
-
-		let start = time::Instant::now();
 
         if let Some(Button::Keyboard(key)) = event.press_args() {
             match key {
@@ -73,49 +70,15 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
         };
         println!("{:?}", client_state);
         let encoded_client = bincode::serialize(&client_state).unwrap();
-		socket.send(Packet::unreliable(
-            server,
-            encoded_client,
-        ))?;
-
-        socket.manual_poll(Instant::now());
-
-        match socket.recv() {
-            Some(SocketEvent::Packet(packet)) => {
-                if packet.addr() == server {
-                    // println!("Server sent: {}", String::from_utf8_lossy(packet.payload()));
-                    println!("Server sent a packet");
-                    let msg = packet.payload();
-					let decoded: NetworkState = bincode::deserialize(msg).unwrap();
-					run(&game.world, &decoded, &mut net_id_mapping);
-
-					// game.world.run::<&Position, _, _>(|positions| {
-        			// 	positions.iter().for_each(|pos| {
-                    //     });
-    			    // });
-                } else {
-                    println!("Unknown sender.");
-                }
-            }
-            Some(SocketEvent::Timeout(_)) => {},
-            _ => ()
-		}
+        // TODO: encode client as unique component
+        game.world.run(|mut transport: UniqueViewMut<TransportResource>| {
+            transport.messages.push_back(Message::new(vec![server], &encoded_client));
+        });
+        game.world.run(process_events);
+        game.world.run(transport::send_network_system);
     }
 
     Ok(())
-}
-
-fn run(world: &World, net_state: &NetworkState, net_id_mapping: &mut HashMap<usize, EntityId>) {
-    world.run(|mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut rectangles: ViewMut<Rectangle>| {
-        for (pos, net_id) in &net_state.positions {
-            if let Some(&id) = net_id_mapping.get(net_id) {
-                positions[id] = *pos;
-            } else {
-                let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(100.0, 100.0)));
-                net_id_mapping.insert(*net_id, entity);
-            }
-        }
-    });
 }
 
 fn main() -> Result<(), laminar::ErrorKind> {    
@@ -142,4 +105,31 @@ impl Rectangle {
     fn new(width: f32, height: f32) -> Rectangle {
         Rectangle { width, height }
     }
+}
+
+fn process_events(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut rectangles: ViewMut<Rectangle>, event_queue: UniqueViewMut<EventQueue>, mut net_id_mapping: UniqueViewMut<NetIdMapping>) {
+    println!("EventQueue: {:?}",  event_queue.events.len());
+    // for event in &event_queue.events {
+    while let Ok(event) = event_queue.events.pop() {
+        match event {
+            NetworkEvent::Message(addr, bytes) => {
+                if let Ok(net_state) = bincode::deserialize::<NetworkState>(&bytes) {
+                    println!("Received {:?} from {}.", net_state, addr);
+                    for (pos, net_id) in &net_state.positions {
+                        if let Some(&id) = net_id_mapping.0.get(net_id) {
+                            positions[id] = *pos;
+                        } else {
+                            let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(100.0, 100.0)));
+                            net_id_mapping.0.insert(*net_id, entity);
+                        }
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    // TODO: use removed array
+    // for entity_id in removed_entities {
+    //     all_storages.delete(entity_id);
+    // }
 }

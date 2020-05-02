@@ -3,6 +3,7 @@ use std::fmt;
 
 use shipyard::*;
 use serde::{Deserialize, Serialize};
+pub mod transport;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Velocity { 
@@ -43,6 +44,7 @@ impl NetworkIdentifier {
 }
 
 pub struct Game {
+	pub frame: u32,
 	pub world: World,
 	added: Vec<usize>,
 	removed: Vec<usize>,
@@ -50,6 +52,7 @@ pub struct Game {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkState {
+	pub frame: u32,
 	pub added: Vec<usize>,
 	pub removed: Vec<usize>,
 	pub positions: Vec<(Position, usize)>,
@@ -57,24 +60,23 @@ pub struct NetworkState {
 
 impl Game {
 	pub fn new_empty() -> Game {
-		Game { world: World::default(), added: vec![], removed: vec![] }
+		Game { world: World::default(), added: vec![], removed: vec![], frame: 0 }
 	}
 
 	pub fn new() -> Game {
 		let world = World::default();
 		world.run(init_world);
 
-		Game { world, added: vec![], removed: vec![] }
+		Game { world, added: vec![], removed: vec![], frame: 0 }
+	}
+
+	pub fn tick(&mut self) {
+		self.frame += 1;
 	}
 	  
 	pub fn encoded(&mut self) -> Vec<u8> {
-		// self.world.run::<&Position, _, _>(|positions| {
-        // 	positions.iter().for_each(|pos| {
-        //     	println!("{:?}", pos);
-        // 	});
-    	// });
-		// println!("{:?}", replicate::<Position>(&self.world));
-		let net_state = NetworkState { 
+		let net_state = NetworkState {
+			frame: self.frame,
 			positions: replicate::<Position>(&self.world),
 			added: self.added.clone(),
 			removed: vec![] 

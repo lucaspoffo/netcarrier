@@ -12,6 +12,9 @@ serde = { version = "1.0.104", features = ["derive"] }
 bincode = "1.2.1"
 laminar = "0.3.2"
 piston_window = "0.107.0"
+bytes = "0.5.4"
+crossbeam-channel = "0.3"
+crossbeam-queue = "0.2.1"
 
 [[bin]]
 name = "server"
