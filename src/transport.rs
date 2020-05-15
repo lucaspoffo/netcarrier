@@ -90,7 +90,8 @@ pub fn send_network_system(network: UniqueViewMut<NetcarrierNetwork>, mut transp
   transport.messages.clear();
 }
 
-pub fn receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<SegQueue<NetworkEvent>>, client_list: Arc<Mutex<Vec<SocketAddr>>>) {
+pub fn receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<SegQueue<NetworkEvent>>, client_list: Arc<Mutex<Vec<SocketAddr>>>) -> Receiver<NetworkEvent> {
+  let (sender, event_receiver) = crossbeam_channel::unbounded();
   let _pool = thread::spawn(move || {
     loop {
       if let Ok(event) = receiver.recv() {
@@ -111,31 +112,33 @@ pub fn receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<
             NetworkEvent::Disconnect(addr)
           }
         };
-        event_queue.push(event);
-        println!("Transport EventQueue: {:?}",  event_queue.len());
+        sender.send(event).unwrap();
+        // event_queue.push(event);
+        // println!("Transport EventQueue: {:?}",  event_queue.len());
       }
     }
   });
+  event_receiver
 }
 
-pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
+pub fn init_network(world: &mut World, server: &str) -> Result<Receiver<NetworkEvent>, ErrorKind> {
   let mut socket = Socket::bind(server)?;
   let sender = socket.get_packet_sender(); 
   let receiver = socket.get_event_receiver();
   let _thread = thread::spawn(move || socket.start_polling());
   let event_queue = EventQueue::new();
   let client_list = ClientList::new();
-  receive_network_system(receiver.clone(), event_queue.events.clone(), client_list.clients.clone());
+  let event_receiver = receive_network_system(receiver.clone(), event_queue.events.clone(), client_list.clients.clone());
   let network = NetcarrierNetwork::new(sender, receiver);
   world.add_unique(network);
   world.add_unique(client_list);
   world.add_unique(event_queue);
   world.add_unique(TransportResource::new());
-  Ok(())
+  Ok(event_receiver)
 }
 
 pub fn client_receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<SegQueue<NetworkEvent>>, server: SocketAddr) {
-  let _pool = thread::spawn(move || {
+  thread::spawn(move || {
     loop {
       if let Ok(event) = receiver.recv() {
         match event {

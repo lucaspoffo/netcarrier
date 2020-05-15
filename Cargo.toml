@@ -15,6 +15,8 @@ piston_window = "0.107.0"
 bytes = "0.5.4"
 crossbeam-channel = "0.3"
 crossbeam-queue = "0.2.1"
+bit-vec = { version = "0.6.2", features = ["serde"] }
+rand = "0.7.3"
 
 [[bin]]
 name = "server"

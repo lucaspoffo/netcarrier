@@ -1,8 +1,10 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::fmt;
 
+use rand::Rng;
 use shipyard::*;
 use serde::{Deserialize, Serialize};
+use bit_vec::BitVec;
 pub mod transport;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -29,11 +31,11 @@ impl Velocity {
     }
 }
 
-static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct NetworkIdentifier {
-	id: usize,
+	id: u32,
 }
 
 impl NetworkIdentifier {
@@ -46,16 +48,28 @@ impl NetworkIdentifier {
 pub struct Game {
 	pub frame: u32,
 	pub world: World,
-	added: Vec<usize>,
-	removed: Vec<usize>,
+	added: Vec<u32>,
+	removed: Vec<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkState {
 	pub frame: u32,
-	pub added: Vec<usize>,
-	pub removed: Vec<usize>,
-	pub positions: Vec<(Position, usize)>,
+	pub entities_id: Vec<u32>,
+	pub added: Vec<u32>,
+	pub removed: Vec<u32>,
+	pub positions: NetworkBitmask<Position>,
+	pub colors: NetworkBitmask<Color>
+}
+
+#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+pub struct Color(pub [f32; 4]);
+
+impl Color {
+	pub fn random() -> Self {
+		let mut rng = rand::thread_rng();
+		Color([rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), 1.0])
+	}
 }
 
 impl Game {
@@ -75,9 +89,18 @@ impl Game {
 	}
 	  
 	pub fn encoded(&mut self) -> Vec<u8> {
+		let mut entities_id = vec![];
+		self.world.run(|net_ids: View<NetworkIdentifier>| {
+			for net_id in net_ids.iter() {
+				entities_id.push(net_id.id);	
+			}
+		});
+
 		let net_state = NetworkState {
 			frame: self.frame,
-			positions: replicate::<Position>(&self.world),
+			entities_id: entities_id.clone(),
+			positions: replicate::<Position>(&self.world, &entities_id),
+			colors: replicate::<Color>(&self.world, &entities_id),
 			added: self.added.clone(),
 			removed: vec![] 
 		};
@@ -96,20 +119,42 @@ fn init_world(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, m
 	});
 }
 
-pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(world: &World) -> Vec<(T, usize)> {
-    let mut state: Vec<(T, usize)> = vec![];
-    world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
-			for (component, net_id) in (&storage, &net_ids).iter() {
-        state.push((*component, net_id.id));
-    	}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkBitmask<T> {
+	entities_mask: BitVec<u32>,
+	pub values: Vec<T>
+}
+
+impl<T> NetworkBitmask<T> {
+	pub fn masked_entities_id(&self, entities_ids: &[u32]) -> Vec<u32> {
+		let mut masked_ids: Vec<u32> = vec![];
+		self.entities_mask.iter().enumerate().for_each(|(i, bit)| {
+			if bit == true {
+				masked_ids.push(entities_ids[i]);
+			}
 		});
-		state
+		masked_ids
+	}
+}
+
+pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(world: &World, entities_id: &[u32]) -> NetworkBitmask<T> {
+	let mut values = vec![];
+	let mut entities_mask: BitVec<u32> = BitVec::from_elem(entities_id.len(), false);
+	world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
+		for (component, net_id) in (&storage, &net_ids).iter() {
+			// TODO: use sparce set for the sweat 0(1) get instead of a find here
+			let id_pos = entities_id.iter().position(|&x| x == net_id.id).expect("All network ids should be contained.");
+			entities_mask.set(id_pos, true);
+			values.push(*component);
+		}
+	});
+	NetworkBitmask { entities_mask, values }
 }
 
 pub fn encoded<T: 'static + Sync + Send + fmt::Debug + Clone + Serialize>(world: &World) -> Vec<u8> {
     let mut encoded: Vec<u8> = vec![];
     world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
-			let mut state: Vec<(&T, usize)> = vec![];
+			let mut state: Vec<(&T, u32)> = vec![];
 			for (component, net_id) in (&storage, &net_ids).iter() {
         state.push((component, net_id.id));
 			}
@@ -118,8 +163,8 @@ pub fn encoded<T: 'static + Sync + Send + fmt::Debug + Clone + Serialize>(world:
     encoded
 }
 
-pub fn deserilize<'de, T: Deserialize<'de>>(encoded: &'de [u8]) -> Vec<(T, usize)> {
-    bincode::deserialize::<Vec<(T, usize)>>(encoded).unwrap()
+pub fn deserilize<'de, T: Deserialize<'de>>(encoded: &'de [u8]) -> Vec<(T, u32)> {
+    bincode::deserialize::<Vec<(T, u32)>>(encoded).unwrap()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

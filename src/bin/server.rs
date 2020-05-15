@@ -1,24 +1,39 @@
 use std::{thread, time::{self, Duration}};
 use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use laminar::{ErrorKind};
 use shipyard::*;
 
-use netcarrier::{Game, Position, Velocity, NetworkIdentifier, ClientState};
+use netcarrier::{Game, Position, Velocity, NetworkIdentifier, ClientState, Color};
 use netcarrier::transport::{self, ClientList, TransportResource, Message, EventQueue, NetworkEvent};
 
 const MS_PER_FRAME: u64 = 50;
 const SERVER: &str = "127.0.0.1:12351";
 
 struct GameState(Vec<u8>);
+struct EventList(Arc<Mutex<Vec<NetworkEvent>>>);
 
 #[allow(unreachable_code)]
 pub fn init() -> Result<(), ErrorKind> {    
     let mut game = Game::new_empty();
-    transport::init_network(&mut game.world, SERVER)?;
+    let event_receiver = transport::init_network(&mut game.world, SERVER)?;
+    let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
+    let events_clone = events.clone();
+    let event_list = EventList(events);
+    thread::spawn(move || {
+        loop {
+            if let Ok(event) = event_receiver.recv() {
+                let mut e = events_clone.lock().unwrap();
+                e.push(event);
+            }
+        }
+    });
+
     game.world.add_unique(GameState(vec![]));
     game.world.add_unique(ClientMapper::new());
+    game.world.add_unique(event_list);
     
     loop {
         game.tick();
@@ -71,26 +86,29 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
     let mut removed_entities: Vec<EntityId> = vec![];
     {
         let mut entities = all_storages.borrow::<EntitiesViewMut>();
-        let event_queue = all_storages.borrow::<UniqueViewMut<EventQueue>>();
+        let mut event_list = all_storages.borrow::<UniqueViewMut<EventList>>();
         let mut client_mapper = all_storages.borrow::<UniqueViewMut<ClientMapper>>();
         let mut positions = all_storages.borrow::<ViewMut<Position>>();
+        let mut colors = all_storages.borrow::<ViewMut<Color>>();
         let mut velocities = all_storages.borrow::<ViewMut<Velocity>>();
         let mut clients_state = all_storages.borrow::<ViewMut<ClientState>>();
         let mut net_ids = all_storages.borrow::<ViewMut<NetworkIdentifier>>();
-        println!("EventQueue: {:?}",  event_queue.events.len());
+        let mut event_list = event_list.0.lock().unwrap();
+        println!("EventList: {:?}",  event_list.len());
         // for event in &event_queue.events {
-        while let Ok(event) = event_queue.events.pop() {
+        // while let Ok(event) = event_queue.events.pop() {
+        event_list.drain(..).for_each(|event| {
             match event {
                 NetworkEvent::Connect(addr) => {
                     println!("Client {} connected.", addr);
                     if let Some(_) = client_mapper.get(&addr) {
-                        break;
+                        return;
                     }
 
                     let net_id = NetworkIdentifier::new();
                     let entity = entities.add_entity(
-                        (&mut positions, &mut velocities, &mut net_ids, &mut clients_state),
-                        (Position::new(100.0, 100.0), Velocity::new(0.0, 0.0), net_id, ClientState::default())
+                        (&mut positions, &mut velocities, &mut net_ids, &mut clients_state, &mut colors),
+                        (Position::new(100.0, 100.0), Velocity::new(0.0, 0.0), net_id, ClientState::default(), Color::random())
                     );
                     client_mapper.insert(addr.clone(), entity);
                 },
@@ -109,7 +127,7 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
                     }
                 },
             }
-        }
+        });
     }
     for entity_id in removed_entities {
         all_storages.delete(entity_id);
