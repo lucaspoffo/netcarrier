@@ -122,7 +122,7 @@ fn process_events(mut entities: EntitiesViewMut, mut positions: ViewMut<Position
                         if let Some(&id) = net_id_mapping.0.get(net_id) {
                             positions[id] = *pos;
                         } else {
-                            let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(100.0, 100.0)));
+                            let entity = entities.add_entity((&mut positions, &mut rectangles), (*pos, Rectangle::new(20.0, 20.0)));
                             net_id_mapping.0.insert(*net_id, entity);
                         }
                     }
