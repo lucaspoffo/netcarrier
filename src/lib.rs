@@ -62,14 +62,12 @@ pub struct NetworkState {
 	pub colors: NetworkBitmask<Color>
 }
 
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
-pub struct Color(pub [f32; 4]);
-
-impl Color {
-	pub fn random() -> Self {
-		let mut rng = rand::thread_rng();
-		Color([rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), 1.0])
-	}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkStateNew<T> {
+	pub frame: u32,
+	pub entities_id: Vec<u32>,
+	pub removed: Vec<u32>,
+	pub components: T
 }
 
 impl Game {
@@ -92,7 +90,7 @@ impl Game {
 		let mut entities_id = vec![];
 		self.world.run(|net_ids: View<NetworkIdentifier>| {
 			for net_id in net_ids.iter() {
-				entities_id.push(net_id.id);	
+				entities_id.push(net_id.id);
 			}
 		});
 
@@ -151,20 +149,15 @@ pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(world
 	NetworkBitmask { entities_mask, values }
 }
 
-pub fn encoded<T: 'static + Sync + Send + fmt::Debug + Clone + Serialize>(world: &World) -> Vec<u8> {
-    let mut encoded: Vec<u8> = vec![];
-    world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
-			let mut state: Vec<(&T, u32)> = vec![];
-			for (component, net_id) in (&storage, &net_ids).iter() {
-        state.push((component, net_id.id));
-			}
-			encoded = bincode::serialize(&state).unwrap();
-		});
-    encoded
-}
+// TODO: remove this stuff below from here
+#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+pub struct Color(pub [f32; 4]);
 
-pub fn deserilize<'de, T: Deserialize<'de>>(encoded: &'de [u8]) -> Vec<(T, u32)> {
-    bincode::deserialize::<Vec<(T, u32)>>(encoded).unwrap()
+impl Color {
+	pub fn random() -> Self {
+		let mut rng = rand::thread_rng();
+		Color([rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), 1.0])
+	}
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

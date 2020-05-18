@@ -7,33 +7,19 @@ use laminar::{ErrorKind};
 use shipyard::*;
 
 use netcarrier::{Game, Position, Velocity, NetworkIdentifier, ClientState, Color};
-use netcarrier::transport::{self, ClientList, TransportResource, Message, EventQueue, NetworkEvent};
+use netcarrier::transport::{self, ClientList, TransportResource, Message, NetworkEvent, EventList};
 
 const MS_PER_FRAME: u64 = 50;
 const SERVER: &str = "127.0.0.1:12351";
 
 struct GameState(Vec<u8>);
-struct EventList(Arc<Mutex<Vec<NetworkEvent>>>);
 
 #[allow(unreachable_code)]
 pub fn init() -> Result<(), ErrorKind> {    
     let mut game = Game::new_empty();
-    let event_receiver = transport::init_network(&mut game.world, SERVER)?;
-    let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
-    let events_clone = events.clone();
-    let event_list = EventList(events);
-    thread::spawn(move || {
-        loop {
-            if let Ok(event) = event_receiver.recv() {
-                let mut e = events_clone.lock().unwrap();
-                e.push(event);
-            }
-        }
-    });
-
+    transport::init_network(&mut game.world, SERVER)?;
     game.world.add_unique(GameState(vec![]));
     game.world.add_unique(ClientMapper::new());
-    game.world.add_unique(event_list);
     
     loop {
         game.tick();
@@ -86,17 +72,16 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
     let mut removed_entities: Vec<EntityId> = vec![];
     {
         let mut entities = all_storages.borrow::<EntitiesViewMut>();
-        let mut event_list = all_storages.borrow::<UniqueViewMut<EventList>>();
+        let event_list = all_storages.borrow::<UniqueViewMut<EventList>>();
         let mut client_mapper = all_storages.borrow::<UniqueViewMut<ClientMapper>>();
         let mut positions = all_storages.borrow::<ViewMut<Position>>();
         let mut colors = all_storages.borrow::<ViewMut<Color>>();
         let mut velocities = all_storages.borrow::<ViewMut<Velocity>>();
         let mut clients_state = all_storages.borrow::<ViewMut<ClientState>>();
         let mut net_ids = all_storages.borrow::<ViewMut<NetworkIdentifier>>();
+        // TODO: add a cleaner interface to use the event_list
         let mut event_list = event_list.0.lock().unwrap();
         println!("EventList: {:?}",  event_list.len());
-        // for event in &event_queue.events {
-        // while let Ok(event) = event_queue.events.pop() {
         event_list.drain(..).for_each(|event| {
             match event {
                 NetworkEvent::Connect(addr) => {
@@ -139,6 +124,7 @@ fn main() -> Result<(), laminar::ErrorKind> {
     init()
 }
 
+//TODO: review client mapper logic, should be in the API?
 struct ClientMapper(HashMap<SocketAddr, EntityId>);
 
 impl ClientMapper {

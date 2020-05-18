@@ -1,11 +1,9 @@
 use std::net::SocketAddr;
-use std::time::Instant;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::collections::VecDeque;
 
 use crossbeam_channel::{Sender, Receiver, SendError};
-use crossbeam_queue::SegQueue;
 use laminar::{Socket, SocketEvent, Packet, ErrorKind};
 use bytes::Bytes;
 use shipyard::*; 
@@ -25,15 +23,13 @@ impl Message {
   }
 }
 
-pub struct NetcarrierNetwork {
-  // socket: Socket
-  sender: Sender<Packet>,
-  receiver: Receiver<SocketEvent>
+pub struct NetworkSender {
+  sender: Sender<Packet>
 }
 
-impl NetcarrierNetwork {
-  pub fn new(sender: Sender<Packet>, receiver: Receiver<SocketEvent>) -> Self {
-    Self { sender, receiver }
+impl NetworkSender {
+  pub fn new(sender: Sender<Packet>) -> Self {
+    Self { sender }
   }
 }
 
@@ -41,16 +37,6 @@ pub enum NetworkEvent {
   Message(SocketAddr, Bytes),
   Connect(SocketAddr),
   Disconnect(SocketAddr)
-}
-
-pub struct EventQueue {
-  pub events: Arc<SegQueue<NetworkEvent>>
-}
-
-impl EventQueue {
-  pub fn new() -> Self {
-    Self { events: Arc::new(SegQueue::new()) }
-  }  
 }
 
 pub struct TransportResource {
@@ -73,12 +59,12 @@ impl ClientList {
   }
 }
 
-pub fn send_network_system(network: UniqueViewMut<NetcarrierNetwork>, mut transport: UniqueViewMut<TransportResource>) {
+pub struct EventList(pub Arc<Mutex<Vec<NetworkEvent>>>);
+
+pub fn send_network_system(network: UniqueViewMut<NetworkSender>, mut transport: UniqueViewMut<TransportResource>) {
   for message in &transport.messages {
-    println!("Destination: {:?}", message.destination);
     for &destination in &message.destination {
       let packet = Packet::reliable_unordered(destination, message.payload.to_vec());
-      // match network.socket.send(packet) {
       match network.sender.send(packet) {
         Err(SendError(e)) => {
           println!("Send Error sending message: {:?}", e);
@@ -90,7 +76,7 @@ pub fn send_network_system(network: UniqueViewMut<NetcarrierNetwork>, mut transp
   transport.messages.clear();
 }
 
-pub fn receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<SegQueue<NetworkEvent>>, client_list: Arc<Mutex<Vec<SocketAddr>>>) -> Receiver<NetworkEvent> {
+pub fn server_receive_network_system(receiver: Receiver<SocketEvent>, client_list: Arc<Mutex<Vec<SocketAddr>>>) -> Receiver<NetworkEvent> {
   let (sender, event_receiver) = crossbeam_channel::unbounded();
   let _pool = thread::spawn(move || {
     loop {
@@ -113,31 +99,41 @@ pub fn receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<
           }
         };
         sender.send(event).unwrap();
-        // event_queue.push(event);
-        // println!("Transport EventQueue: {:?}",  event_queue.len());
       }
     }
   });
   event_receiver
 }
 
-pub fn init_network(world: &mut World, server: &str) -> Result<Receiver<NetworkEvent>, ErrorKind> {
+pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
   let mut socket = Socket::bind(server)?;
   let sender = socket.get_packet_sender(); 
   let receiver = socket.get_event_receiver();
   let _thread = thread::spawn(move || socket.start_polling());
-  let event_queue = EventQueue::new();
   let client_list = ClientList::new();
-  let event_receiver = receive_network_system(receiver.clone(), event_queue.events.clone(), client_list.clients.clone());
-  let network = NetcarrierNetwork::new(sender, receiver);
-  world.add_unique(network);
+
+  // TODO: review event receiver logic, seems we could simplify it a bit
+  let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
+  let events_clone = events.clone();
+  let event_list = EventList(events);
+  let event_receiver = server_receive_network_system(receiver, client_list.clients.clone());
+  thread::spawn(move || {
+    loop {
+        if let Ok(event) = event_receiver.recv() {
+            let mut e = events_clone.lock().unwrap();
+            e.push(event);
+        }
+    }
+  });
+  let network_sender = NetworkSender::new(sender);
+  world.add_unique(network_sender);
   world.add_unique(client_list);
-  world.add_unique(event_queue);
+  world.add_unique(event_list);
   world.add_unique(TransportResource::new());
-  Ok(event_receiver)
+  Ok(())
 }
 
-pub fn client_receive_network_system(receiver: Receiver<SocketEvent>, event_queue: Arc<SegQueue<NetworkEvent>>, server: SocketAddr) {
+pub fn client_receive_network_system(receiver: Receiver<SocketEvent>, event_list: Arc<Mutex<Vec<NetworkEvent>>>, server: SocketAddr) {
   thread::spawn(move || {
     loop {
       if let Ok(event) = receiver.recv() {
@@ -147,11 +143,10 @@ pub fn client_receive_network_system(receiver: Receiver<SocketEvent>, event_queu
               packet.addr(),
               Bytes::copy_from_slice(packet.payload())
             );
-            event_queue.push(event);
+            event_list.lock().unwrap().push(event);
           },
           _ => {}
         };
-        println!("Transport EventQueue: {:?}",  event_queue.len());
       }
     }
   });
@@ -164,12 +159,13 @@ pub fn init_client_network(world: &mut World, addr: &str, server: &str) -> Resul
   let sender = socket.get_packet_sender(); 
   let receiver = socket.get_event_receiver();
   let _thread = thread::spawn(move || socket.start_polling());
+  let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
+  let event_list = EventList(events);
   
-  let event_queue = EventQueue::new();
-  client_receive_network_system(receiver.clone(), event_queue.events.clone(), server);
-  let network = NetcarrierNetwork::new(sender, receiver);
-  world.add_unique(network);
-  world.add_unique(event_queue);
+  client_receive_network_system(receiver.clone(), event_list.0.clone(), server);
+  let network_sender = NetworkSender::new(sender);
+  world.add_unique(network_sender);
+  world.add_unique(event_list);
   world.add_unique(TransportResource::new());
   Ok(())
 }

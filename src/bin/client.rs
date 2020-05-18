@@ -10,7 +10,7 @@ use laminar::{ErrorKind, Packet, Socket, SocketEvent, Config};
 use shipyard::*;
 
 use netcarrier::{Game, NetworkState, Position, NetworkIdentifier, ClientState, Color};
-use netcarrier::transport::{self, TransportResource, Message, EventQueue, NetworkEvent};
+use netcarrier::transport::{self, TransportResource, Message, EventList, NetworkEvent};
 
 const SERVER: &str = "127.0.0.1:12351";
 
@@ -107,10 +107,11 @@ impl Rectangle {
     }
 }
 
-fn process_events(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>,  mut colors: ViewMut<Color>, mut rectangles: ViewMut<Rectangle>, event_queue: UniqueViewMut<EventQueue>, mut net_id_mapping: UniqueViewMut<NetIdMapping>) {
-    println!("EventQueue: {:?}",  event_queue.events.len());
+fn process_events(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>,  mut colors: ViewMut<Color>, mut rectangles: ViewMut<Rectangle>, event_list: UniqueViewMut<EventList>, mut net_id_mapping: UniqueViewMut<NetIdMapping>) {
+    let mut event_list = event_list.0.lock().unwrap();
+    println!("EventList: {:?}",  event_list.len());
     // for event in &event_queue.events {
-    while let Ok(event) = event_queue.events.pop() {
+    event_list.drain(..).for_each(|event| {
         match event {
             NetworkEvent::Message(addr, bytes) => {
                 if let Ok(net_state) = bincode::deserialize::<NetworkState>(&bytes) {
@@ -141,7 +142,7 @@ fn process_events(mut entities: EntitiesViewMut, mut positions: ViewMut<Position
             },
             _ => {}
         }
-    }
+    });
     // TODO: use removed array
     // for entity_id in removed_entities {
     //     all_storages.delete(entity_id);
