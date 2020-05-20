@@ -1,13 +1,13 @@
-use std::{thread, time::{self, Duration}};
+use std::{thread, time};
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use laminar::{ErrorKind};
 use shipyard::*;
 
-use netcarrier::{Game, Position, Velocity, NetworkIdentifier, ClientState, Color};
+use netcarrier::{Game, NetworkIdentifier};
 use netcarrier::transport::{self, ClientList, TransportResource, Message, NetworkEvent, EventList};
+use netcarrier::shared::{ClientState, Color, Position, Velocity, Rectangle};
 
 const MS_PER_FRAME: u64 = 50;
 const SERVER: &str = "127.0.0.1:12351";
@@ -15,8 +15,9 @@ const SERVER: &str = "127.0.0.1:12351";
 struct GameState(Vec<u8>);
 
 #[allow(unreachable_code)]
-pub fn init() -> Result<(), ErrorKind> {    
-    let mut game = Game::new_empty();
+pub fn init() -> Result<(), ErrorKind> {
+    let world = World::default();
+    let mut game = Game::new(world);
     transport::init_network(&mut game.world, SERVER)?;
     game.world.add_unique(GameState(vec![]));
     game.world.add_unique(ClientMapper::new());
@@ -36,6 +37,7 @@ pub fn init() -> Result<(), ErrorKind> {
             game_state.0 = game_encoded;
         });
 
+        // TODO: this should not be run manually in the server, expose a better API
         game.world.run(add_players_packets);
         game.world.run(transport::send_network_system);
 
@@ -76,6 +78,7 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
         let mut client_mapper = all_storages.borrow::<UniqueViewMut<ClientMapper>>();
         let mut positions = all_storages.borrow::<ViewMut<Position>>();
         let mut colors = all_storages.borrow::<ViewMut<Color>>();
+        let mut rectangles = all_storages.borrow::<ViewMut<Rectangle>>();
         let mut velocities = all_storages.borrow::<ViewMut<Velocity>>();
         let mut clients_state = all_storages.borrow::<ViewMut<ClientState>>();
         let mut net_ids = all_storages.borrow::<ViewMut<NetworkIdentifier>>();
@@ -92,8 +95,8 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
 
                     let net_id = NetworkIdentifier::new();
                     let entity = entities.add_entity(
-                        (&mut positions, &mut velocities, &mut net_ids, &mut clients_state, &mut colors),
-                        (Position::new(100.0, 100.0), Velocity::new(0.0, 0.0), net_id, ClientState::default(), Color::random())
+                        (&mut positions, &mut velocities, &mut net_ids, &mut clients_state, &mut colors, &mut rectangles),
+                        (Position::new(100.0, 100.0), Velocity::new(0.0, 0.0), net_id, ClientState::default(), Color::random(), Rectangle::new(20.0, 20.0))
                     );
                     client_mapper.insert(addr.clone(), entity);
                 },
@@ -124,7 +127,6 @@ fn main() -> Result<(), laminar::ErrorKind> {
     init()
 }
 
-//TODO: review client mapper logic, should be in the API?
 struct ClientMapper(HashMap<SocketAddr, EntityId>);
 
 impl ClientMapper {

@@ -1,35 +1,17 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::fmt;
+use std::collections::HashMap;
 
-use rand::Rng;
+
 use shipyard::*;
 use serde::{Deserialize, Serialize};
 use bit_vec::BitVec;
+
+// TODO: remove this from lib
+use shared::{Color, Position, Rectangle};
+
 pub mod transport;
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-pub struct Velocity { 
-	pub dx: f32, 
-	pub dy: f32 
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-pub struct Position { 
-	pub x: f32, 
-	pub y: f32 
-}
-
-impl Position {
-    pub fn new(x: f32, y: f32) -> Position {
-        Position { x, y }
-    }
-}
-
-impl Velocity {
-    pub fn new(dx: f32, dy: f32) -> Velocity {
-        Velocity { dx, dy }
-    }
-}
+pub mod shared;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -45,76 +27,78 @@ impl NetworkIdentifier {
 	}
 }
 
-pub struct Game {
-	pub frame: u32,
-	pub world: World,
-	added: Vec<u32>,
-	removed: Vec<u32>,
-}
+macro_rules! make_network_state {
+	($($element: ident: $ty: ty),*) => {
+		#[derive(Debug, Serialize, Deserialize)]
+		pub struct NetworkState {
+			pub frame: u32,
+			pub entities_id: Vec<u32>,
+			$(pub $element: NetworkBitmask<$ty>),* 
+		}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkState {
-	pub frame: u32,
-	pub entities_id: Vec<u32>,
-	pub added: Vec<u32>,
-	pub removed: Vec<u32>,
-	pub positions: NetworkBitmask<Position>,
-	pub colors: NetworkBitmask<Color>
-}
+		impl NetworkState {
+			pub fn new(world: &World, frame: u32) {
+				let mut entities_id = vec![];
+				self.world.run(|net_ids: View<NetworkIdentifier>| {
+					for net_id in net_ids.iter() {
+						entities_id.push(net_id.id);
+					}
+				});
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkStateNew<T> {
-	pub frame: u32,
-	pub entities_id: Vec<u32>,
-	pub removed: Vec<u32>,
-	pub components: T
-}
+				let net_state = NetworkState {
+					frame: self.frame,
+					entities_id: entities_id.clone(),
+					$($element: replicate::<$ty>(&self.world, &entities_id)),*
+				}
+			}
 
-impl Game {
-	pub fn new_empty() -> Game {
-		Game { world: World::default(), added: vec![], removed: vec![], frame: 0 }
+			pub fn apply_state(&self, mut entities: EntitiesViewMut, net_id_mapping: &mut HashMap<u32, EntityId>, $(mut $element: ViewMut<$ty>),*) {
+				// Create new ids
+				for entity_id in &self.entities_id {
+					if !net_id_mapping.contains_key(&entity_id) {
+						let entity = entities.add_entity((), ());
+						net_id_mapping.insert(*entity_id, entity);
+					}
+				}
+				
+				// For each component type updates/creates value
+				$({
+					let masked_entities_ids = self.$element.masked_entities_id(&self.entities_id);
+					for (i, component) in self.$element.values.iter().enumerate() {
+						let net_id = &masked_entities_ids[i];
+						if let Some(&id) = net_id_mapping.get(net_id) {
+							if !$element.contains(id) {
+									entities.add_component(&mut $element, *component, id);
+							} else {
+									$element[id] = *component;
+							}
+						}
+					}
+				})*
+			}
+		} 
 	}
+}
 
-	pub fn new() -> Game {
-		let world = World::default();
-		world.run(init_world);
+make_network_state!(positions: Position, colors: Color, rectangles: Rectangle);
 
-		Game { world, added: vec![], removed: vec![], frame: 0 }
+pub struct NetworkController {
+	pub frame: u32
+}
+
+impl NetworkController {
+	pub fn new() -> Self {
+		Self { frame: 0 }
 	}
 
 	pub fn tick(&mut self) {
 		self.frame += 1;
 	}
 	  
-	pub fn encoded(&mut self) -> Vec<u8> {
-		let mut entities_id = vec![];
-		self.world.run(|net_ids: View<NetworkIdentifier>| {
-			for net_id in net_ids.iter() {
-				entities_id.push(net_id.id);
-			}
-		});
-
-		let net_state = NetworkState {
-			frame: self.frame,
-			entities_id: entities_id.clone(),
-			positions: replicate::<Position>(&self.world, &entities_id),
-			colors: replicate::<Color>(&self.world, &entities_id),
-			added: self.added.clone(),
-			removed: vec![] 
-		};
-		self.added.clear();
+	pub fn encode_world(&mut self, world: &World) -> Vec<u8> {
+		let net_state = NetworkState::new(world, self.frame);
 		bincode::serialize(&net_state).unwrap()
 	}
-}
-
-fn init_world(mut entities: EntitiesViewMut, mut positions: ViewMut<Position>, mut velocities: ViewMut<Velocity>, mut net_ids: ViewMut<NetworkIdentifier>) {
-	(0..5).for_each(|_| {
-		let net_id = NetworkIdentifier::new();
-		entities.add_entity(
-			(&mut positions, &mut velocities, &mut net_ids),
-			(Position::new(0.0, 0.0), Velocity::new(1.0, 1.0), net_id)
-		);
-	});
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -140,41 +124,11 @@ pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(world
 	let mut entities_mask: BitVec<u32> = BitVec::from_elem(entities_id.len(), false);
 	world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
 		for (component, net_id) in (&storage, &net_ids).iter() {
-			// TODO: use sparce set for the sweat 0(1) get instead of a find here
+			// TODO: use sparce set for the sweat O(1) get instead of a find here
 			let id_pos = entities_id.iter().position(|&x| x == net_id.id).expect("All network ids should be contained.");
 			entities_mask.set(id_pos, true);
 			values.push(*component);
 		}
 	});
 	NetworkBitmask { entities_mask, values }
-}
-
-// TODO: remove this stuff below from here
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
-pub struct Color(pub [f32; 4]);
-
-impl Color {
-	pub fn random() -> Self {
-		let mut rng = rand::thread_rng();
-		Color([rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), rng.gen_range(0.0, 1.0), 1.0])
-	}
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ClientState {
-	pub up: bool,
-	pub down: bool,
-	pub left: bool,
-	pub right: bool,
-}
-
-impl Default for ClientState {
-	fn default() -> ClientState {
-		ClientState {
-			up: false,
-			down: false,
-			left: false,
-			right: false
-		}
-	}
 }
