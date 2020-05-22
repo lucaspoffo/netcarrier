@@ -2,7 +2,7 @@
 - Add log crate
 
 ## Client
-- Add jit buffer for the incoming packets in client
+- Syncronize entities when they are removed in the server
 - Add command list in client state, make sure the commands are acked and valid in server, always send unacked commands, invalidate really old commands
 
 ## Server

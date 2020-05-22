@@ -7,6 +7,8 @@ use bytes::Bytes;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use laminar::{ErrorKind, Packet, Socket, SocketEvent};
 use shipyard::*;
+use serde::de::DeserializeOwned;
+use super::NetworkFrame;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Message {
@@ -50,6 +52,8 @@ pub struct ClientList {
 }
 
 pub struct EventList(pub Arc<Mutex<Vec<NetworkEvent>>>);
+
+pub struct JitBuffer<T>(pub Arc<Mutex<Vec<T>>>);
 
 pub fn send_network_system(
     network: UniqueViewMut<NetworkSender>,
@@ -121,20 +125,21 @@ pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
     Ok(())
 }
 
-pub fn client_receive_network_system(
+pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkFrame + Sync + Send>(
     receiver: Receiver<SocketEvent>,
-    event_list: Arc<Mutex<Vec<NetworkEvent>>>,
+    jit_buffer: Arc<Mutex<Vec<T>>>,
     server: SocketAddr,
 ) {
     thread::spawn(move || loop {
         if let Ok(event) = receiver.recv() {
             match event {
+                // TODO: match every socket event type
                 SocketEvent::Packet(packet) if packet.addr() == server => {
-                    let event = NetworkEvent::Message(
-                        packet.addr(),
-                        Bytes::copy_from_slice(packet.payload()),
-                    );
-                    event_list.lock().unwrap().push(event);
+                    if let Ok(net_state) = bincode::deserialize::<T>(&packet.payload()) {
+                        let mut jit_buffer = jit_buffer.lock().unwrap();
+                        jit_buffer.push(net_state);
+                        jit_buffer.sort_by(|a, b| a.frame().cmp(&b.frame()));
+                    }                    
                 }
                 _ => {}
             };
@@ -142,20 +147,20 @@ pub fn client_receive_network_system(
     });
 }
 
-pub fn init_client_network(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
+pub fn init_client_network<T: 'static + DeserializeOwned + NetworkFrame + Sync + Send>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
 
     let sender = socket.get_packet_sender();
     let receiver = socket.get_event_receiver();
     let _thread = thread::spawn(move || socket.start_polling());
-    let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
-    let event_list = EventList(events);
+    let buffer: Arc<Mutex<Vec<T>>> = Arc::new(Mutex::new(vec![]));
+    let jit_buffer = JitBuffer(buffer);
 
-    client_receive_network_system(receiver, event_list.0.clone(), server);
+    client_receive_network_system::<T>(receiver, jit_buffer.0.clone(), server);
     let network_sender = NetworkSender::new(sender);
     world.add_unique(network_sender);
-    world.add_unique(event_list);
+    world.add_unique(jit_buffer);
     world.add_unique(TransportResource::default());
     Ok(())
 }

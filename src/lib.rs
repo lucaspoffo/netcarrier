@@ -22,11 +22,15 @@ impl Default for NetworkIdentifier {
     }
 }
 
+pub trait NetworkFrame {
+	fn frame(&self) -> u32;
+}
+
 #[macro_export]
 macro_rules! make_network_state {
 
 	($($element: ident: $ty: ty),*) => {
-		use $crate::{NetworkBitmask, NetworkIdentifier, replicate};
+		use $crate::{NetworkBitmask, NetworkIdentifier, replicate, NetworkFrame};
 		use shipyard::*;
 		use std::collections::HashMap;
 
@@ -35,6 +39,12 @@ macro_rules! make_network_state {
 			pub frame: u32,
 			pub entities_id: Vec<u32>,
 			$(pub $element: NetworkBitmask<$ty>),*
+		}
+
+		impl NetworkFrame for NetworkState {
+			fn frame(&self) -> u32 {
+				self.frame
+			}
 		}
 
 		impl NetworkState {

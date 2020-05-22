@@ -9,7 +9,7 @@ use piston_window::*;
 use shipyard::*;
 
 use netcarrier::shared::{ClientState, Color, NetworkState, Position, Rectangle};
-use netcarrier::transport::{self, EventList, Message, NetworkEvent, TransportResource};
+use netcarrier::transport::{self, JitBuffer, Message, TransportResource};
 
 const SERVER: &str = "127.0.0.1:12351";
 
@@ -21,7 +21,7 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
     let mut world = World::default();
     let net_id_mapping = NetIdMapping(HashMap::new());
     world.add_unique(net_id_mapping);
-    transport::init_client_network(&mut world, addr, SERVER)?;
+    transport::init_client_network::<NetworkState>(&mut world, addr, SERVER)?;
     let server: SocketAddr = SERVER.parse().unwrap();
     let mut client_state = ClientState::default();
 
@@ -109,23 +109,22 @@ fn process_events(
     positions: ViewMut<Position>,
     colors: ViewMut<Color>,
     rectangles: ViewMut<Rectangle>,
-    event_list: UniqueViewMut<EventList>,
+    jit_buffer: UniqueViewMut<JitBuffer<NetworkState>>,
     mut net_id_mapping: UniqueViewMut<NetIdMapping>,
 ) {
-    let mut event_list = event_list.0.lock().unwrap();
-    println!("EventList: {:?}", event_list.len());
-    // TODO: we should have a jit buffer when appling state from the server and removing from it based on frame and removing any state that has lower frame than alredy processed
-    if let Some(NetworkEvent::Message(addr, bytes)) = event_list.pop() {
-        if let Ok(net_state) = bincode::deserialize::<NetworkState>(&bytes) {
-            println!("Received {:?} from {}.", net_state, addr);
-            net_state.apply_state(
-                entities,
-                &mut net_id_mapping.0,
-                positions,
-                colors,
-                rectangles,
-            );
-        }
+    let mut jit_buffer = jit_buffer.0.lock().unwrap();
+    println!("JitBuffer: {:?}", jit_buffer.len());
+    // TODO: review how to define the size of the jit buffer
+    if jit_buffer.len() < 3 {
+        return;
     }
-    event_list.clear();
+    if let Some(net_state) = jit_buffer.pop() {
+        net_state.apply_state(
+            entities,
+            &mut net_id_mapping.0,
+            positions,
+            colors,
+            rectangles,
+        );
+    }
 }
