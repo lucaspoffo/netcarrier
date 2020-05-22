@@ -22,7 +22,7 @@ pub fn init() -> Result<(), ErrorKind> {
     let mut net_controller = NetworkController::default();
     transport::init_network(&mut world, SERVER)?;
     world.add_unique(GameState(vec![]));
-    world.add_unique(ClientMapper::new());
+    world.add_unique(ClientMapper::default());
 
     loop {
         net_controller.tick();
@@ -93,6 +93,7 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
         let mut velocities = all_storages.borrow::<ViewMut<Velocity>>();
         let mut clients_state = all_storages.borrow::<ViewMut<ClientState>>();
         let mut net_ids = all_storages.borrow::<ViewMut<NetworkIdentifier>>();
+
         // TODO: add a cleaner interface to use the event_list
         let mut event_list = event_list.0.lock().unwrap();
         println!("EventList: {:?}", event_list.len());
@@ -153,13 +154,10 @@ fn main() -> Result<(), laminar::ErrorKind> {
     init()
 }
 
+#[derive(Default)]
 struct ClientMapper(HashMap<SocketAddr, EntityId>);
 
 impl ClientMapper {
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
     fn insert(&mut self, addr: SocketAddr, entity_id: EntityId) {
         self.0.insert(addr, entity_id);
     }
