@@ -8,6 +8,8 @@ use shipyard::*;
 pub mod shared;
 pub mod transport;
 
+
+
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -32,7 +34,7 @@ macro_rules! make_network_state {
 	($($element: ident: $ty: ty),*) => {
 		use $crate::{NetworkBitmask, NetworkIdentifier, replicate, NetworkFrame};
 		use shipyard::*;
-		use std::collections::HashMap;
+		use $crate::transport::NetworkIdMapping;
 
 		#[derive(Debug, Serialize, Deserialize)]
 		pub struct NetworkState {
@@ -63,29 +65,45 @@ macro_rules! make_network_state {
 				}
 			}
 
-			pub fn apply_state(&self, mut entities: EntitiesViewMut, net_id_mapping: &mut HashMap<u32, EntityId>, $(mut $element: ViewMut<$ty>),*) {
-				// Create new ids
-				for entity_id in &self.entities_id {
-					if !net_id_mapping.contains_key(&entity_id) {
-						let entity = entities.add_entity((), ());
-						net_id_mapping.insert(*entity_id, entity);
-					}
-				}
-
-				// For each component type updates/creates value
-				$({
-					let masked_entities_ids = self.$element.masked_entities_id(&self.entities_id);
-					for (i, component) in self.$element.values.iter().enumerate() {
-						let net_id = &masked_entities_ids[i];
-						if let Some(&id) = net_id_mapping.get(net_id) {
-							if !$element.contains(id) {
-									entities.add_component(&mut $element, *component, id);
-							} else {
-									$element[id] = *component;
-							}
+			pub fn apply_state(&self, mut all_storages: AllStoragesViewMut) {
+				let mut removed_entities: Vec<EntityId> = vec![];
+				{
+					let mut entities = all_storages.borrow::<EntitiesViewMut>();
+					let mut net_id_mapping = all_storages.borrow::<UniqueViewMut<NetworkIdMapping>>();
+					$(let mut $element = all_storages.borrow::<ViewMut<$ty>>());*;
+					// Create new ids
+					for entity_id in &self.entities_id {
+						if !net_id_mapping.0.contains_key(&entity_id) {
+							let entity = entities.add_entity((), ());
+							net_id_mapping.0.insert(*entity_id, entity);
 						}
 					}
-				})*
+
+					//Remove entities
+					for net_id in net_id_mapping.0.keys() {
+						if !self.entities_id.contains(net_id) {
+							removed_entities.push(net_id_mapping.0[net_id]);
+						}
+					}
+
+					// For each component type updates/creates value
+					$({
+						let masked_entities_ids = self.$element.masked_entities_id(&self.entities_id);
+						for (i, component) in self.$element.values.iter().enumerate() {
+							let net_id = &masked_entities_ids[i];
+							if let Some(&id) = net_id_mapping.0.get(net_id) {
+								if !$element.contains(id) {
+										entities.add_component(&mut $element, *component, id);
+								} else {
+										$element[id] = *component;
+								}
+							}
+						}
+					})*
+				}
+				for entity_id in removed_entities {
+					all_storages.delete(entity_id);
+				}
 			}
 		}
 	}

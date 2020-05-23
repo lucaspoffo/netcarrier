@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 
@@ -13,14 +12,11 @@ use netcarrier::transport::{self, JitBuffer, Message, TransportResource};
 
 const SERVER: &str = "127.0.0.1:12351";
 
-struct NetIdMapping(HashMap<u32, EntityId>);
 
 #[allow(unreachable_code)]
 pub fn init(addr: &str) -> Result<(), ErrorKind> {
     println!("Connected on {}", addr);
     let mut world = World::default();
-    let net_id_mapping = NetIdMapping(HashMap::new());
-    world.add_unique(net_id_mapping);
     transport::init_client_network::<NetworkState>(&mut world, addr, SERVER)?;
     let server: SocketAddr = SERVER.parse().unwrap();
     let mut client_state = ClientState::default();
@@ -104,27 +100,20 @@ fn main() -> Result<(), laminar::ErrorKind> {
     init(&addr)
 }
 
-fn process_events(
-    entities: EntitiesViewMut,
-    positions: ViewMut<Position>,
-    colors: ViewMut<Color>,
-    rectangles: ViewMut<Rectangle>,
-    jit_buffer: UniqueViewMut<JitBuffer<NetworkState>>,
-    mut net_id_mapping: UniqueViewMut<NetIdMapping>,
-) {
-    let mut jit_buffer = jit_buffer.0.lock().unwrap();
-    println!("JitBuffer: {:?}", jit_buffer.len());
-    // TODO: review how to define the size of the jit buffer
-    if jit_buffer.len() < 3 {
-        return;
+// TODO: this should be on our API side
+fn process_events(all_storages: AllStoragesViewMut) {
+    let net_state: Option<NetworkState>;
+    {
+        let jit_buffer = all_storages.borrow::<UniqueViewMut<JitBuffer<NetworkState>>>();
+        let mut jit_buffer = jit_buffer.0.lock().unwrap();
+        println!("JitBuffer: {:?}", jit_buffer.len());
+        // TODO: review how to define the size of the jit buffer (config, dynamic...)
+        if jit_buffer.len() < 3 {
+            return;
+        }
+        net_state = jit_buffer.pop();
     }
-    if let Some(net_state) = jit_buffer.pop() {
-        net_state.apply_state(
-            entities,
-            &mut net_id_mapping.0,
-            positions,
-            colors,
-            rectangles,
-        );
+    if let Some(state) = net_state {
+        state.apply_state(all_storages);
     }
 }

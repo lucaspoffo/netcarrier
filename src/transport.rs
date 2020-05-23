@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use crossbeam_channel::{Receiver, SendError, Sender};
@@ -54,6 +55,8 @@ pub struct ClientList {
 pub struct EventList(pub Arc<Mutex<Vec<NetworkEvent>>>);
 
 pub struct JitBuffer<T>(pub Arc<Mutex<Vec<T>>>);
+
+pub struct NetworkIdMapping(pub HashMap<u32, EntityId>);
 
 pub fn send_network_system(
     network: UniqueViewMut<NetworkSender>,
@@ -150,15 +153,16 @@ pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkFram
 pub fn init_client_network<T: 'static + DeserializeOwned + NetworkFrame + Sync + Send>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
-
+    let net_id_mapping = NetworkIdMapping(HashMap::new());
     let sender = socket.get_packet_sender();
     let receiver = socket.get_event_receiver();
     let _thread = thread::spawn(move || socket.start_polling());
     let buffer: Arc<Mutex<Vec<T>>> = Arc::new(Mutex::new(vec![]));
     let jit_buffer = JitBuffer(buffer);
-
+    
     client_receive_network_system::<T>(receiver, jit_buffer.0.clone(), server);
     let network_sender = NetworkSender::new(sender);
+    world.add_unique(net_id_mapping);
     world.add_unique(network_sender);
     world.add_unique(jit_buffer);
     world.add_unique(TransportResource::default());
