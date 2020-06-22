@@ -1,27 +1,30 @@
+#![recursion_limit = "2048"]
+#![allow(dead_code)]
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bit_vec::BitVec;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use shipyard::*;
+
+#[macro_use]
+extern crate mashup;
 
 pub mod shared;
 pub mod transport;
-
-
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct NetworkIdentifier {
-    id: u32,
+	id: u32,
 }
 
 impl Default for NetworkIdentifier {
-    fn default() -> Self {
-        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-        NetworkIdentifier { id }
-    }
+	fn default() -> Self {
+		let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+		NetworkIdentifier { id }
+	}
 }
 
 pub trait NetworkFrame {
@@ -30,13 +33,25 @@ pub trait NetworkFrame {
 
 #[macro_export]
 macro_rules! make_network_state {
-
 	($($element: ident: $ty: ty),*) => {
 		use $crate::{NetworkBitmask, NetworkIdentifier, replicate, NetworkFrame};
 		use shipyard::*;
 		use $crate::transport::NetworkIdMapping;
+		use bit_vec::BitVec;
 
-		#[derive(Debug, Serialize, Deserialize)]
+		mashup! {
+			$(
+				m["delta_" $element] = delta_ $element;
+				m["delta_mask_" $element] = delta_mask_ $element;
+				m["mask_" $element] = mask_ $element;
+				m["network_" $element] = network_ $element;
+				m["delta_network_" $element] = delta_network_ $element;
+				m["ids_" $element] = ids_ $element;
+				m["snapshot_ids_" $element] = snapshot_ids_ $element;
+			)*
+		}
+
+		#[derive(Debug, Serialize, Deserialize, PartialEq)]
 		pub struct NetworkState {
 			pub frame: u32,
 			pub entities_id: Vec<u32>,
@@ -93,9 +108,9 @@ macro_rules! make_network_state {
 							let net_id = &masked_entities_ids[i];
 							if let Some(&id) = net_id_mapping.0.get(net_id) {
 								if !$element.contains(id) {
-										entities.add_component(&mut $element, *component, id);
+								 	entities.add_component(&mut $element, *component, id);
 								} else {
-										$element[id] = *component;
+									$element[id] = *component;
 								}
 							}
 						}
@@ -106,57 +121,333 @@ macro_rules! make_network_state {
 				}
 			}
 		}
+
+		m! {
+			#[derive(Debug, Serialize, Deserialize)]
+			pub struct NetworkDeltaState {
+				pub frame: u32,
+				pub snapshot_frame: u32,
+				pub entities_id: Vec<u32>,
+				$(pub $element: NetworkBitmask<$ty>,)*
+				$(pub "delta_" $element: NetworkBitmask<<$ty as Delta>::DeltaType>),*
+			}
+		}
+		m! {
+			impl NetworkDeltaState {
+				fn from(snapshot: &NetworkState, current_state: &NetworkState) -> NetworkDeltaState {
+					// let (intersection, diference) = intersection_and_diference(&current_state.entities_id, &snapshot.entities_id);
+					let entities_len = current_state.entities_id.len();
+					//TODO: we should have a sparce set so from the id we can get the component, instead of a find
+					$(
+						let "ids_" $element = current_state.$element.masked_entities_id(&current_state.entities_id);
+						let "snapshot_ids_" $element = snapshot.$element.masked_entities_id(&snapshot.entities_id);
+						let mut $element = vec![];
+						let mut "mask_" $element: BitVec<u32> = BitVec::from_elem(entities_len, false);
+						let mut "delta_" $element = vec![];
+						let mut "delta_mask_" $element: BitVec<u32> = BitVec::from_elem(entities_len, false);
+						for (i, &id) in "ids_" $element.iter().enumerate() {
+							match "snapshot_ids_" $element.iter().position(|&x| x == id) {
+								Some(snapshot_index) => {
+									let snapshot_component = snapshot.$element.values[snapshot_index];
+									let current_component = current_state.$element.values[i];
+									let delta = snapshot_component.from(&current_component);
+									"delta_mask_" $element.set(i, true);
+            			"delta_" $element.push(delta);
+								},
+								None => {
+									let current_component = current_state.$element.values[i];
+									"mask_" $element.set(i, true);
+            			$element.push(current_component);
+								}
+							}
+						}
+
+						let "network_" $element = NetworkBitmask {
+							values: $element,
+							entities_mask: "mask_" $element,
+						};
+						let "delta_network_" $element = NetworkBitmask {
+							values: "delta_" $element,
+							entities_mask: "delta_mask_" $element,
+						};
+					)*
+					//check if has component from last snapshot else make delta from default
+					// pegar entidades que estão somente no current_state
+					NetworkDeltaState {
+						frame: current_state.frame(),
+						snapshot_frame: snapshot.frame(),
+						entities_id: current_state.entities_id.clone(),
+						$($element: "network_" $element,)*
+						$("delta_" $element: "delta_network_" $element,)*
+					}
+				}
+
+				fn apply(&self, snapshot: &NetworkState) -> NetworkState {
+					// NetworkBitmask<T::Delta> -> NetworkBitmask<T>
+					$(
+						let "snapshot_ids_" $element = snapshot.$element.masked_entities_id(&snapshot.entities_id);
+						let "ids_" $element = self."delta_" $element.masked_entities_id(&self.entities_id);
+						let mut $element = vec![];
+						for (i, &id) in "ids_" $element.iter().enumerate() {
+							let snapshot_index = "snapshot_ids_" $element.iter().position(|&x| x == id).expect("All deltas ids must be in the snapshot");
+							let snapshot_component = snapshot.$element.values[snapshot_index].clone();
+							let delta_component = self."delta_" $element.values[i].clone();
+							let component = snapshot_component.apply(&delta_component);
+							$element.push(component);
+						}
+
+						let mut "network_" $element = NetworkBitmask {
+							values: $element,
+							entities_mask: self."delta_" $element.entities_mask.clone(),
+						};
+						// Append full networkbitmask with delta networkbitmask
+						"network_" $element.join(&self.$element);
+					)*
+	
+					NetworkState {
+						frame: self.frame,
+						entities_id: self.entities_id.clone(),
+						$($element: "network_" $element),*
+					}
+				}
+			}
+
+		}
+
 	}
+}
+
+// TODO: sort the network ids, so we can break when x > y
+pub fn intersection_and_diference(a: &[u32], b: &[u32]) -> (Vec<u32>, Vec<u32>) {
+	let mut intersection = vec![];
+	let mut diference = vec![];
+	for (index, x) in a.iter().enumerate() {
+		let mut found = false;
+		for y in b {
+			if x == y {
+				intersection.push(index as u32);
+				found = true;
+				break;
+			}
+		}
+		if !found {
+			diference.push(index as u32);
+		}
+	}
+	(intersection, diference)
+}
+
+// TODO: make from return Result, sometimes we can't retrieve an delta
+pub trait Delta {
+	type DeltaType: Serialize + DeserializeOwned;
+
+	fn from(&self, other: &Self) -> Self::DeltaType;
+	fn apply(&self, other: &Self::DeltaType) -> Self;
 }
 
 #[derive(Default)]
 pub struct NetworkController {
-    pub frame: u32,
+	pub frame: u32,
 }
 
 impl NetworkController {
-    pub fn tick(&mut self) {
-        self.frame += 1;
-    }
+	pub fn tick(&mut self) {
+		self.frame += 1;
+	}
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+// TODO: review attributes visibilities
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct NetworkBitmask<T> {
-    entities_mask: BitVec<u32>,
-    pub values: Vec<T>,
+	pub entities_mask: BitVec<u32>,
+	pub values: Vec<T>,
 }
 
-impl<T> NetworkBitmask<T> {
-    pub fn masked_entities_id(&self, entities_ids: &[u32]) -> Vec<u32> {
-        let mut masked_ids: Vec<u32> = vec![];
-        self.entities_mask.iter().enumerate().for_each(|(i, bit)| {
-            if bit {
-                masked_ids.push(entities_ids[i]);
-            }
-        });
-        masked_ids
-    }
+impl<T> NetworkBitmask<T> where T: Clone {
+	pub fn masked_entities_id(&self, entities_ids: &[u32]) -> Vec<u32> {
+		let mut masked_ids: Vec<u32> = vec![];
+		self.entities_mask.iter().enumerate().for_each(|(i, bit)| {
+			if bit {
+				masked_ids.push(entities_ids[i]);
+			}
+		});
+		masked_ids
+	}
+
+	//TODO: this should not be pub (test purposes only?, maybe pass to NetworkState)
+	pub fn add_value(&mut self, value: T) {
+		self.values.push(value);
+		self.entities_mask.push(true);
+	}
+
+	// TODO: should this be &self, and return new NetworkBitmask<T>?
+	pub fn join(&mut self, other: &NetworkBitmask<T>) {
+		// Should be same length of entities_mask
+		let len = self.entities_mask.len();
+		assert_eq!(len, other.entities_mask.len());
+		let mut entities_mask: BitVec<u32> = BitVec::from_elem(len, false);
+		let mut values = vec![];
+		let mut self_index = 0;
+		let mut other_index = 0;
+		for i in 0..len {
+			if self.entities_mask.get(i).unwrap() {
+				entities_mask.set(i, true);
+				values.push(self.values[self_index].clone());
+				self_index += 1;
+			} else if other.entities_mask.get(i).unwrap() {
+				entities_mask.set(i, true);
+				values.push(other.values[other_index].clone());
+				other_index += 1;
+			}
+		}
+		self.entities_mask = entities_mask;
+		self.values = values;
+	}
 }
 
 pub fn replicate<T: 'static + Sync + Send + fmt::Debug + Copy + Serialize>(
-    world: &World,
-    entities_id: &[u32],
+	world: &World,
+	entities_id: &[u32],
 ) -> NetworkBitmask<T> {
-    let mut values = vec![];
-    let mut entities_mask: BitVec<u32> = BitVec::from_elem(entities_id.len(), false);
-    world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
-        for (component, net_id) in (&storage, &net_ids).iter() {
-            // TODO: use sparce set for the sweat O(1) get instead of a find here
-            let id_pos = entities_id
-                .iter()
-                .position(|&x| x == net_id.id)
-                .expect("All network ids should be contained.");
-            entities_mask.set(id_pos, true);
-            values.push(*component);
-        }
-    });
-    NetworkBitmask {
-        entities_mask,
-        values,
-    }
+	let mut values = vec![];
+	let mut entities_mask: BitVec<u32> = BitVec::from_elem(entities_id.len(), false);
+	world.run(|storage: View<T>, net_ids: View<NetworkIdentifier>| {
+		for (component, net_id) in (&storage, &net_ids).iter() {
+			// TODO: use sparce set for the sweat O(1) get instead of a find here
+			let id_pos = entities_id
+				.iter()
+				.position(|&x| x == net_id.id)
+				.expect("All network ids should be contained.");
+			entities_mask.set(id_pos, true);
+			values.push(*component);
+		}
+	});
+	NetworkBitmask {
+		entities_mask,
+		values,
+	}
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+mod tests {
+	use super::*;
+	use serde::{Deserialize, Serialize};
+
+	#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+	pub struct Position {
+		pub x: f32,
+		pub y: f32,
+	}
+
+	impl Position {
+		pub fn new(x: f32, y: f32) -> Position {
+			Position { x, y }
+		}
+	}
+
+	#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+	pub struct DeltaPosition {
+		pub x: u8,
+		pub y: u8,
+	}
+
+	impl Delta for Position {
+		type DeltaType = DeltaPosition;
+
+		fn from(&self, _other: &Position) -> DeltaPosition {
+			DeltaPosition { x: 0, y: 0 }
+		}
+
+		fn apply(&self, _other: &Self::DeltaType) -> Position {
+			Position { x: 0.0, y: 0.0 }
+		}
+	}
+
+	make_network_state!(positions: Position);
+
+	#[test]
+	fn join_network_bitmask() {
+		let mut a_mask: BitVec<u32> = BitVec::from_elem(2, false);
+		a_mask.set(0, true);
+		let a_values: Vec<u32> = vec![0];
+		let mut a = NetworkBitmask {
+			entities_mask: a_mask,
+			values: a_values,
+		};
+		
+		let mut b_mask: BitVec<u32> = BitVec::from_elem(2, false);
+		b_mask.set(1, true);
+		let b_values: Vec<u32> = vec![1];
+		let b = NetworkBitmask {
+			entities_mask: b_mask,
+			values: b_values,
+		};
+
+		a.join(&b);
+		assert_eq!(a.entities_mask, BitVec::from_elem(2, true));
+		assert_eq!(a.values, vec![0, 1]);
+	}
+
+	fn setup_snapshot() -> NetworkState {
+		let entities_mask: BitVec<u32> = BitVec::from_elem(1, true);
+		let values = vec![Position::new(0.0, 0.0)];
+		let network_bitmask = NetworkBitmask {
+			entities_mask,
+			values,
+		};
+
+		NetworkState {
+			frame: 0,
+			entities_id: vec![1],
+			positions: network_bitmask,
+		}
+	}
+
+	#[test]
+	fn has_delta_component() {
+		let snapshot = setup_snapshot();
+		let mut state = setup_snapshot();
+		state.positions.values[0] = Position::new(1.0, 1.0);
+		
+		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		assert_eq!(delta_state.delta_positions.values.len(), 1);
+		assert_eq!(delta_state.positions.values.len(), 0);
+	}
+	
+	#[test]
+	fn has_new_entity() {
+		let snapshot = setup_snapshot();
+		let mut state = setup_snapshot();
+		state.entities_id = vec![2];
+
+		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		assert_eq!(delta_state.delta_positions.values.len(), 0);
+		assert_eq!(delta_state.positions.values.len(), 1);
+	}
+
+	#[test]
+	fn has_new_and_delta_entity() {
+		let snapshot = setup_snapshot();
+		let mut state = setup_snapshot();
+		state.entities_id.push(2);
+		state.positions.add_value(Position::new(1.0, 1.0));
+
+		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		assert_eq!(delta_state.delta_positions.values.len(), 1);
+		assert_eq!(delta_state.positions.values.len(), 1);
+	}
+
+	#[test]
+	fn apply_delta_state() {
+		let snapshot = setup_snapshot();
+		let mut state = setup_snapshot();
+		state.entities_id.push(2);
+		state.positions.add_value(Position::new(1.0, 1.0));
+
+		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		println!("{:?}", delta_state);
+		let applied_state = delta_state.apply(&snapshot);
+		assert_eq!(applied_state, state);
+	}
 }

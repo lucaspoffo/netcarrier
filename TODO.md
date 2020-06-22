@@ -1,11 +1,15 @@
 # TODO
 - Add log crate
-
+- Syncronize the frames from the server with the client
+- #derive(Delta)
+- When getting a delta, it should return a Result<Delta>
+- Add custom serialization to Bitvec(sparce set), for better space efficience
 ## Client
 - Syncronize entities when they are removed in the server
 - Add command list in client state, make sure the commands are acked and valid in server, always send unacked commands, invalidate really old commands
 
 ## Server
+- When sending snapshot packet send reliable packets
 - Use deltas packets and full state packet (before doing make sure to benchmark how much network we will be saving and the cost for calculating deltas)
   - Would have 2 types of packets FullPacket and DeltaPacket
   - All components would implement an Trait that world compare last main frame value tu current and return the delta type with the delta value

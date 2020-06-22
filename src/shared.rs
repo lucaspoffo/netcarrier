@@ -2,7 +2,9 @@ use super::make_network_state;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+use super::Delta;
+
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 pub struct Color(pub [f32; 4]);
 
 impl Color {
@@ -73,3 +75,57 @@ impl Rectangle {
 }
 
 make_network_state!(positions: Position, colors: Color, rectangles: Rectangle);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DeltaPosition {
+    pub x: u8,
+    pub y: u8
+}
+
+impl Delta for Position {
+    type DeltaType = DeltaPosition;
+
+    fn from(&self, _other: &Position) -> DeltaPosition {
+        DeltaPosition { x: 0, y: 0 }
+    }
+
+    fn apply(&self, _other: &Self::DeltaType) -> Position {
+        Position { x: 0.0, y: 0.0 }
+    }
+}
+
+impl Delta for Velocity {
+    type DeltaType = DeltaPosition;
+
+    fn from(&self, _other: &Velocity) -> DeltaPosition {
+        DeltaPosition { x: 0, y: 0 }
+    } 
+
+    fn apply(&self, _other: &Self::DeltaType) -> Velocity {
+        Velocity { dx: 0.0, dy: 0.0 }
+    }
+}
+
+impl Delta for Rectangle {
+    type DeltaType = DeltaPosition;
+
+    fn from(&self, _other: &Rectangle) -> DeltaPosition {
+        DeltaPosition { x: 0, y: 0 }
+    }
+
+    fn apply(&self, _other: &Self::DeltaType) -> Rectangle {
+        Rectangle { width: 0.0, height: 0.0 }
+    }
+}
+
+impl Delta for Color {
+    type DeltaType = DeltaPosition;
+
+    fn from(&self, _other: &Color) -> DeltaPosition {
+        DeltaPosition { x: 0, y: 0 }
+    }
+
+    fn apply(&self, _other: &Self::DeltaType) -> Color {
+        Color([0.0, 0.0, 0.0, 0.0])
+    }
+}

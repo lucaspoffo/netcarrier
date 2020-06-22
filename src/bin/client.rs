@@ -79,7 +79,7 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
                 .push_back(Message::new(vec![server], &encoded_client));
         });
         world.run(process_events);
-        world.run(transport::send_network_system);
+        world.run(transport::client_send_network_system);
     }
 
     Ok(())

@@ -37,13 +37,13 @@ pub fn init() -> Result<(), ErrorKind> {
         let game_encoded: Vec<u8> = bincode::serialize(&net_state).unwrap();
 
         world.run(|mut game_state: UniqueViewMut<GameState>| {
-            println!("GameState: {:?}", game_encoded);
+            // println!("GameState: {:?}", game_encoded);
             game_state.0 = game_encoded;
         });
 
         // TODO: this should not be run manually in the server, expose a better API
         world.run(add_players_packets);
-        world.run(transport::send_network_system);
+        world.run(transport::server_send_network_system);
 
         let now = time::Instant::now();
         let frame_duration = time::Duration::from_millis(MS_PER_FRAME);
@@ -59,7 +59,7 @@ fn system_move(mut posisitons: ViewMut<Position>, velocities: View<Velocity>) {
     for (pos, vel) in (&mut posisitons, &velocities).iter() {
         pos.x += vel.dx * 10.0;
         pos.y += vel.dy * 10.0;
-        println!("{:?}", pos);
+        // println!("{:?}", pos);
     }
 }
 
@@ -135,7 +135,7 @@ fn process_events(mut all_storages: AllStoragesViewMut) {
                 NetworkEvent::Message(addr, bytes) => {
                     // TODO: Review how to treat client state
                     if let Ok(decoded) = bincode::deserialize::<ClientState>(&bytes) {
-                        println!("Received {:?} from {}.", decoded, addr);
+                        // println!("Received {:?} from {}.", decoded, addr);
                         if let Some(entity_id) = client_mapper.get(&addr) {
                             clients_state[*entity_id] = decoded;
                         }
