@@ -5,23 +5,20 @@ use std::{thread, time};
 use laminar::ErrorKind;
 use shipyard::*;
 
-use netcarrier::shared::{ClientState, Color, NetworkState, Position, Rectangle, Velocity};
+use netcarrier::shared::{ClientState, Color, Position, Rectangle, Velocity, NetworkPacket};
 use netcarrier::transport::{
-    self, ClientList, EventList, Message, NetworkEvent, TransportResource,
+    self, EventList, NetworkEvent, update_server
 };
 use netcarrier::{NetworkController, NetworkIdentifier};
 
 const MS_PER_FRAME: u64 = 50;
 const SERVER: &str = "127.0.0.1:12351";
 
-struct GameState(Vec<u8>);
-
 #[allow(unreachable_code)]
 pub fn init() -> Result<(), ErrorKind> {
     let mut world = World::default();
     let mut net_controller = NetworkController::default();
     transport::init_network(&mut world, SERVER)?;
-    world.add_unique(GameState(vec![]));
     world.add_unique(ClientMapper::default());
 
     loop {
@@ -33,17 +30,7 @@ pub fn init() -> Result<(), ErrorKind> {
         world.run(system_update_player);
         world.run(system_move);
 
-        let net_state = NetworkState::new(&world, net_controller.frame);
-        let game_encoded: Vec<u8> = bincode::serialize(&net_state).unwrap();
-
-        world.run(|mut game_state: UniqueViewMut<GameState>| {
-            // println!("GameState: {:?}", game_encoded);
-            game_state.0 = game_encoded;
-        });
-
-        // TODO: this should not be run manually in the server, expose a better API
-        world.run(add_players_packets);
-        world.run(transport::server_send_network_system);
+        update_server::<NetworkPacket>(&mut world, net_controller.frame);
 
         let now = time::Instant::now();
         let frame_duration = time::Duration::from_millis(MS_PER_FRAME);
@@ -61,17 +48,6 @@ fn system_move(mut posisitons: ViewMut<Position>, velocities: View<Velocity>) {
         pos.y += vel.dy * 10.0;
         // println!("{:?}", pos);
     }
-}
-
-fn add_players_packets(
-    client_list: UniqueView<ClientList>,
-    mut transport: UniqueViewMut<TransportResource>,
-    game_state: UniqueView<GameState>,
-) {
-    transport.messages.push_back(Message::new(
-        client_list.clients.lock().unwrap().clone(),
-        &game_state.0[..],
-    ));
 }
 
 fn system_update_player(clients_state: View<ClientState>, mut velocities: ViewMut<Velocity>) {

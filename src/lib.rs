@@ -27,14 +27,15 @@ impl Default for NetworkIdentifier {
 	}
 }
 
-pub trait NetworkFrame {
+pub trait NetworkState {
+	fn new(world: &World, frame: u32) -> Self;
 	fn frame(&self) -> u32;
 }
 
 #[macro_export]
 macro_rules! make_network_state {
 	($($element: ident: $ty: ty),*) => {
-		use $crate::{NetworkBitmask, NetworkIdentifier, replicate, NetworkFrame};
+		use $crate::{NetworkBitmask, NetworkIdentifier, replicate, NetworkState};
 		use shipyard::*;
 		use $crate::transport::NetworkIdMapping;
 		use bit_vec::BitVec;
@@ -52,20 +53,18 @@ macro_rules! make_network_state {
 		}
 
 		#[derive(Debug, Serialize, Deserialize, PartialEq)]
-		pub struct NetworkState {
+		pub struct NetworkPacket {
 			pub frame: u32,
 			pub entities_id: Vec<u32>,
 			$(pub $element: NetworkBitmask<$ty>),*
 		}
 
-		impl NetworkFrame for NetworkState {
+		impl NetworkState for NetworkPacket {
 			fn frame(&self) -> u32 {
 				self.frame
 			}
-		}
 
-		impl NetworkState {
-			pub fn new(world: &World, frame: u32) -> Self {
+			fn new(world: &World, frame: u32) -> Self {
 				let mut entities_id = vec![];
 				world.run(|net_ids: View<NetworkIdentifier>| {
 					for net_id in net_ids.iter() {
@@ -73,12 +72,16 @@ macro_rules! make_network_state {
 					}
 				});
 
-				NetworkState {
+				NetworkPacket {
 					frame,
 					entities_id: entities_id.clone(),
 					$($element: replicate::<$ty>(&world, &entities_id)),*
 				}
 			}
+		}
+
+		impl NetworkPacket {
+			
 
 			pub fn apply_state(&self, mut all_storages: AllStoragesViewMut) {
 				let mut removed_entities: Vec<EntityId> = vec![];
@@ -124,7 +127,7 @@ macro_rules! make_network_state {
 
 		m! {
 			#[derive(Debug, Serialize, Deserialize)]
-			pub struct NetworkDeltaState {
+			pub struct NetworkDeltaPacket {
 				pub frame: u32,
 				pub snapshot_frame: u32,
 				pub entities_id: Vec<u32>,
@@ -133,9 +136,8 @@ macro_rules! make_network_state {
 			}
 		}
 		m! {
-			impl NetworkDeltaState {
-				fn from(snapshot: &NetworkState, current_state: &NetworkState) -> NetworkDeltaState {
-					// let (intersection, diference) = intersection_and_diference(&current_state.entities_id, &snapshot.entities_id);
+			impl NetworkDeltaPacket {
+				fn from(snapshot: &NetworkPacket, current_state: &NetworkPacket) -> NetworkDeltaPacket {
 					let entities_len = current_state.entities_id.len();
 					//TODO: we should have a sparce set so from the id we can get the component, instead of a find
 					$(
@@ -171,9 +173,8 @@ macro_rules! make_network_state {
 							entities_mask: "delta_mask_" $element,
 						};
 					)*
-					//check if has component from last snapshot else make delta from default
-					// pegar entidades que estão somente no current_state
-					NetworkDeltaState {
+
+					NetworkDeltaPacket {
 						frame: current_state.frame(),
 						snapshot_frame: snapshot.frame(),
 						entities_id: current_state.entities_id.clone(),
@@ -182,8 +183,7 @@ macro_rules! make_network_state {
 					}
 				}
 
-				fn apply(&self, snapshot: &NetworkState) -> NetworkState {
-					// NetworkBitmask<T::Delta> -> NetworkBitmask<T>
+				fn apply(&self, snapshot: &NetworkPacket) -> NetworkPacket {
 					$(
 						let "snapshot_ids_" $element = snapshot.$element.masked_entities_id(&snapshot.entities_id);
 						let "ids_" $element = self."delta_" $element.masked_entities_id(&self.entities_id);
@@ -204,37 +204,15 @@ macro_rules! make_network_state {
 						"network_" $element.join(&self.$element);
 					)*
 	
-					NetworkState {
+					NetworkPacket {
 						frame: self.frame,
 						entities_id: self.entities_id.clone(),
 						$($element: "network_" $element),*
 					}
 				}
 			}
-
-		}
-
-	}
-}
-
-// TODO: sort the network ids, so we can break when x > y
-pub fn intersection_and_diference(a: &[u32], b: &[u32]) -> (Vec<u32>, Vec<u32>) {
-	let mut intersection = vec![];
-	let mut diference = vec![];
-	for (index, x) in a.iter().enumerate() {
-		let mut found = false;
-		for y in b {
-			if x == y {
-				intersection.push(index as u32);
-				found = true;
-				break;
-			}
-		}
-		if !found {
-			diference.push(index as u32);
 		}
 	}
-	(intersection, diference)
 }
 
 // TODO: make from return Result, sometimes we can't retrieve an delta
@@ -282,7 +260,7 @@ impl<T> NetworkBitmask<T> where T: Clone {
 
 	// TODO: should this be &self, and return new NetworkBitmask<T>?
 	pub fn join(&mut self, other: &NetworkBitmask<T>) {
-		// Should be same length of entities_mask
+		// Todo: Both should have the same length (assert? return Result?)
 		let len = self.entities_mask.len();
 		assert_eq!(len, other.entities_mask.len());
 		let mut entities_mask: BitVec<u32> = BitVec::from_elem(len, false);
@@ -389,7 +367,7 @@ mod tests {
 		assert_eq!(a.values, vec![0, 1]);
 	}
 
-	fn setup_snapshot() -> NetworkState {
+	fn setup_snapshot() -> NetworkPacket {
 		let entities_mask: BitVec<u32> = BitVec::from_elem(1, true);
 		let values = vec![Position::new(0.0, 0.0)];
 		let network_bitmask = NetworkBitmask {
@@ -397,7 +375,7 @@ mod tests {
 			values,
 		};
 
-		NetworkState {
+		NetworkPacket {
 			frame: 0,
 			entities_id: vec![1],
 			positions: network_bitmask,
@@ -410,7 +388,7 @@ mod tests {
 		let mut state = setup_snapshot();
 		state.positions.values[0] = Position::new(1.0, 1.0);
 		
-		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		let delta_state = NetworkDeltaPacket::from(&snapshot, &state);
 		assert_eq!(delta_state.delta_positions.values.len(), 1);
 		assert_eq!(delta_state.positions.values.len(), 0);
 	}
@@ -421,7 +399,7 @@ mod tests {
 		let mut state = setup_snapshot();
 		state.entities_id = vec![2];
 
-		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		let delta_state = NetworkDeltaPacket::from(&snapshot, &state);
 		assert_eq!(delta_state.delta_positions.values.len(), 0);
 		assert_eq!(delta_state.positions.values.len(), 1);
 	}
@@ -433,7 +411,7 @@ mod tests {
 		state.entities_id.push(2);
 		state.positions.add_value(Position::new(1.0, 1.0));
 
-		let delta_state = NetworkDeltaState::from(&snapshot, &state);
+		let delta_state = NetworkDeltaPacket::from(&snapshot, &state);
 		assert_eq!(delta_state.delta_positions.values.len(), 1);
 		assert_eq!(delta_state.positions.values.len(), 1);
 	}
@@ -445,8 +423,7 @@ mod tests {
 		state.entities_id.push(2);
 		state.positions.add_value(Position::new(1.0, 1.0));
 
-		let delta_state = NetworkDeltaState::from(&snapshot, &state);
-		println!("{:?}", delta_state);
+		let delta_state = NetworkDeltaPacket::from(&snapshot, &state);
 		let applied_state = delta_state.apply(&snapshot);
 		assert_eq!(applied_state, state);
 	}

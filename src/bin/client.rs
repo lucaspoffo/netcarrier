@@ -7,17 +7,16 @@ use laminar::ErrorKind;
 use piston_window::*;
 use shipyard::*;
 
-use netcarrier::shared::{ClientState, Color, NetworkState, Position, Rectangle};
-use netcarrier::transport::{self, JitBuffer, Message, TransportResource};
+use netcarrier::shared::{ClientState, Color, NetworkPacket, Position, Rectangle};
+use netcarrier::transport::{self, JitBuffer, update_client};
 
 const SERVER: &str = "127.0.0.1:12351";
-
 
 #[allow(unreachable_code)]
 pub fn init(addr: &str) -> Result<(), ErrorKind> {
     println!("Connected on {}", addr);
     let mut world = World::default();
-    transport::init_client_network::<NetworkState>(&mut world, addr, SERVER)?;
+    transport::init_client_network::<NetworkPacket>(&mut world, addr, SERVER)?;
     let server: SocketAddr = SERVER.parse().unwrap();
     let mut client_state = ClientState::default();
 
@@ -69,17 +68,8 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
                 _ => (),
             }
         };
-        println!("{:?}", client_state);
-        let encoded_client = bincode::serialize(&client_state).unwrap();
-        // TODO: encode client as unique component
-        // TODO: review how to expose the network systems
-        world.run(|mut transport: UniqueViewMut<TransportResource>| {
-            transport
-                .messages
-                .push_back(Message::new(vec![server], &encoded_client));
-        });
+        update_client::<ClientState>(&mut world, client_state.clone(), server.clone());
         world.run(process_events);
-        world.run(transport::client_send_network_system);
     }
 
     Ok(())
@@ -102,9 +92,9 @@ fn main() -> Result<(), laminar::ErrorKind> {
 
 // TODO: this should be on our API side
 fn process_events(all_storages: AllStoragesViewMut) {
-    let net_state: Option<NetworkState>;
+    let net_state: Option<NetworkPacket>;
     {
-        let jit_buffer = all_storages.borrow::<UniqueViewMut<JitBuffer<NetworkState>>>();
+        let jit_buffer = all_storages.borrow::<UniqueViewMut<JitBuffer<NetworkPacket>>>();
         let mut jit_buffer = jit_buffer.0.lock().unwrap();
         println!("JitBuffer: {:?}", jit_buffer.len());
         // TODO: review how to define the size of the jit buffer (config, dynamic...)

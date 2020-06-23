@@ -10,19 +10,21 @@ use laminar::{ErrorKind, Packet, Socket, SocketEvent};
 use shipyard::*;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use super::NetworkFrame;
+use super::NetworkState;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Message {
     pub destination: Vec<SocketAddr>,
     pub payload: Bytes,
+    pub delivery: DeliveryRequirement
 }
 
 impl Message {
-    pub fn new(destination: Vec<SocketAddr>, payload: &[u8]) -> Self {
+    pub fn new(destination: Vec<SocketAddr>, payload: &[u8], delivery: DeliveryRequirement) -> Self {
         Self {
             destination,
             payload: Bytes::copy_from_slice(payload),
+            delivery
         }
     }
 }
@@ -65,6 +67,15 @@ pub struct NetworkClientState {
 	state: Vec<u8>
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum DeliveryRequirement {
+    Unreliable,
+    UnreliableSequenced(Option<u8>),
+    Reliable,
+    ReliableSequenced(Option<u8>),
+    ReliableOrdered(Option<u8>),
+}
+
 // TODO: review struct name and struct alias
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NetworkClientAck {
@@ -86,7 +97,15 @@ pub fn client_send_network_system(
                 ack: ack.clone(),
                 state: message.payload.to_vec()
             };
-            let packet = Packet::reliable_unordered(destination, bincode::serialize(&net_state).unwrap());
+            let payload = bincode::serialize(&net_state).unwrap();
+            let packet = match message.delivery {
+                DeliveryRequirement::Reliable => Packet::reliable_unordered(destination, payload),
+                DeliveryRequirement::Unreliable => Packet::unreliable(destination, payload),
+                DeliveryRequirement::UnreliableSequenced(stream_id) => Packet::unreliable_sequenced(destination, payload, stream_id),
+                DeliveryRequirement::ReliableSequenced(stream_id) => Packet::reliable_sequenced(destination, payload, stream_id),
+                DeliveryRequirement::ReliableOrdered(stream_id) => Packet::reliable_ordered(destination, payload, stream_id),
+            };
+                
             if let Err(SendError(e)) = network.sender.send(packet) {
                 println!("Send Error sending message: {:?}", e);
             }
@@ -170,7 +189,7 @@ pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
     Ok(())
 }
 
-pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkFrame + Sync + Send>(
+pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkState + Sync + Send>(
     receiver: Receiver<SocketEvent>,
     jit_buffer: Arc<Mutex<Vec<T>>>,
     network_client_ack: Arc<Mutex<NetworkClientAck>>,
@@ -196,7 +215,7 @@ pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkFram
     });
 }
 
-pub fn init_client_network<T: 'static + DeserializeOwned + NetworkFrame + Sync + Send>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
+pub fn init_client_network<T: 'static + DeserializeOwned + NetworkState + Sync + Send>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
     let net_id_mapping = NetworkIdMapping(HashMap::new());
@@ -217,3 +236,25 @@ pub fn init_client_network<T: 'static + DeserializeOwned + NetworkFrame + Sync +
     world.add_unique(TransportResource::default());
     Ok(())
 }
+
+pub fn update_server<T: NetworkState + Serialize>(world: &mut World, frame: u32) {
+    let net_state = T::new(&world, frame);
+    let game_encoded: Vec<u8> = bincode::serialize(&net_state).unwrap();
+    world.run(|client_list: UniqueView<ClientList>, mut transport: UniqueViewMut<TransportResource>| {
+        transport.messages.push_back(Message::new(
+            client_list.clients.lock().unwrap().clone(),
+            &game_encoded[..],
+            DeliveryRequirement::Unreliable));
+    });
+    world.run(server_send_network_system);
+} 
+
+pub fn update_client<T: Serialize>(world: &mut World, client_state: T, server: SocketAddr) {
+    let encoded_client: Vec<u8> = bincode::serialize(&client_state).unwrap();
+    world.run(|mut transport: UniqueViewMut<TransportResource>| {
+        transport
+            .messages
+            .push_back(Message::new(vec![server], &encoded_client, DeliveryRequirement::Unreliable));
+    });
+    world.run(client_send_network_system);
+} 

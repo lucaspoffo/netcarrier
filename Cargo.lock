@@ -1356,9 +1356,9 @@ dependencies = [
 
 [[package]]
 name = "shipyard"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d67a1a36a43057eaa154b81e956509df80f0e70263eb308150d697d5d7bc83bb"
+checksum = "7d3f05dded110259370cf2bb98206cc8489422a43d836ff9270be9213caf0044"
 dependencies = [
  "hashbrown",
  "num_cpus",
