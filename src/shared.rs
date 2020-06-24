@@ -76,56 +76,38 @@ impl Rectangle {
 
 make_network_state!(positions: Position, colors: Color, rectangles: Rectangle);
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct DeltaPosition {
-    pub x: u8,
-    pub y: u8
-}
-
 impl Delta for Position {
-    type DeltaType = DeltaPosition;
+    type DeltaType = (f32, f32);
 
-    fn from(&self, _other: &Position) -> DeltaPosition {
-        DeltaPosition { x: 0, y: 0 }
+    fn from(&self, other: &Position) -> (f32, f32) {
+        (other.x, other.y)
     }
 
-    fn apply(&self, _other: &Self::DeltaType) -> Position {
-        Position { x: 0.0, y: 0.0 }
-    }
-}
-
-impl Delta for Velocity {
-    type DeltaType = DeltaPosition;
-
-    fn from(&self, _other: &Velocity) -> DeltaPosition {
-        DeltaPosition { x: 0, y: 0 }
-    } 
-
-    fn apply(&self, _other: &Self::DeltaType) -> Velocity {
-        Velocity { dx: 0.0, dy: 0.0 }
+    fn apply(&self, delta: &Self::DeltaType) -> Position {
+        Position { x: delta.0, y: delta.1 }
     }
 }
 
 impl Delta for Rectangle {
-    type DeltaType = DeltaPosition;
+    type DeltaType = (f32, f32);
 
-    fn from(&self, _other: &Rectangle) -> DeltaPosition {
-        DeltaPosition { x: 0, y: 0 }
+    fn from(&self, other: &Rectangle) -> Self::DeltaType {
+        (other.width, other.height)
     }
 
-    fn apply(&self, _other: &Self::DeltaType) -> Rectangle {
-        Rectangle { width: 0.0, height: 0.0 }
+    fn apply(&self, delta: &Self::DeltaType) -> Rectangle {
+        Rectangle { width: delta.0, height: delta.1 }
     }
 }
 
 impl Delta for Color {
-    type DeltaType = DeltaPosition;
+    type DeltaType = [f32; 4];
 
-    fn from(&self, _other: &Color) -> DeltaPosition {
-        DeltaPosition { x: 0, y: 0 }
+    fn from(&self, other: &Color) -> Self::DeltaType {
+        other.0
     }
 
-    fn apply(&self, _other: &Self::DeltaType) -> Color {
-        Color([0.0, 0.0, 0.0, 0.0])
+    fn apply(&self, delta: &Self::DeltaType) -> Color {
+        Color(*delta)
     }
 }

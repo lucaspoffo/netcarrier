@@ -17,8 +17,8 @@ const SERVER: &str = "127.0.0.1:12351";
 #[allow(unreachable_code)]
 pub fn init() -> Result<(), ErrorKind> {
     let mut world = World::default();
-    let mut net_controller = NetworkController::default();
-    transport::init_network(&mut world, SERVER)?;
+    let mut net_controller = NetworkController::new(40);
+    transport::init_network::<NetworkPacket>(&mut world, SERVER)?;
     world.add_unique(ClientMapper::default());
 
     loop {

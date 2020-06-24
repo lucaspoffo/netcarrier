@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use bytes::Bytes;
 use crossbeam_channel::{Receiver, SendError, Sender};
@@ -10,7 +11,7 @@ use laminar::{ErrorKind, Packet, Socket, SocketEvent};
 use shipyard::*;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use super::NetworkState;
+use super::{NetworkState, Delta, NetworkController, NetworkDeltaState};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Message {
@@ -139,7 +140,7 @@ pub fn server_receive_network_system(
             let event = match event {
                 SocketEvent::Packet(packet) => {
                     if let Ok(net_client_state) = bincode::deserialize::<NetworkClientState>(&packet.payload()) {
-                        println!("Client {}, last_received frame: {}", packet.addr(), net_client_state.ack.last_frame);
+                        // println!("Client {}, last_received frame: {}", packet.addr(), net_client_state.ack.last_frame);
                         NetworkEvent::Message(packet.addr(), Bytes::copy_from_slice(&net_client_state.state))
                     } else {
                         break;
@@ -147,12 +148,14 @@ pub fn server_receive_network_system(
                 }
                 SocketEvent::Connect(addr) => {
                     let mut clients = client_list.lock().unwrap();
+                    println!("Client {} connected!", addr);
                     if !clients.contains(&addr) {
                         clients.push(addr);
                     }
                     NetworkEvent::Connect(addr)
                 }
                 SocketEvent::Timeout(addr) => {
+                    println!("Client {} disconnected!", addr);
                     client_list.lock().unwrap().retain(|&x| x != addr);
                     NetworkEvent::Disconnect(addr)
                 }
@@ -163,15 +166,21 @@ pub fn server_receive_network_system(
     event_receiver
 }
 
-pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
+pub fn init_network<T>(world: &mut World, server: &str) -> Result<(), ErrorKind> 
+    where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug, 
+        T::DeltaType: NetworkDeltaState + Debug 
+{
     let mut socket = Socket::bind(server)?;
     let sender = socket.get_packet_sender();
     let receiver = socket.get_event_receiver();
     let _thread = thread::spawn(move || socket.start_polling());
     let client_list = ClientList::default();
+    let network_controller = NetworkController::new(10);
 
     // TODO: review event receiver logic, seems we could simplify it a bit
     let events: Arc<Mutex<Vec<NetworkEvent>>> = Arc::new(Mutex::new(vec![]));
+    let snapshot = GameSnapshot(Arc::new(Mutex::new(T::new(&world, 0))));
+
     let events_clone = events.clone();
     let event_list = EventList(events);
     let event_receiver = server_receive_network_system(receiver, client_list.clients.clone());
@@ -183,30 +192,66 @@ pub fn init_network(world: &mut World, server: &str) -> Result<(), ErrorKind> {
     });
     let network_sender = NetworkSender::new(sender);
     world.add_unique(network_sender);
+    world.add_unique(snapshot);
+    world.add_unique(network_controller);
     world.add_unique(client_list);
     world.add_unique(event_list);
     world.add_unique(TransportResource::default());
     Ok(())
 }
 
-pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkState + Sync + Send>(
+#[derive(Serialize, Deserialize, Debug)]
+pub enum ServerMessage<T> where T: Delta {
+    Snapshot(T),
+    Delta(T::DeltaType)
+}
+
+pub fn client_receive_network_system<T>(
     receiver: Receiver<SocketEvent>,
     jit_buffer: Arc<Mutex<Vec<T>>>,
+    snapshots: Arc<Mutex<Vec<T>>>,
     network_client_ack: Arc<Mutex<NetworkClientAck>>,
     server: SocketAddr,
-) {
+) where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Clone + Debug, 
+        T::DeltaType: NetworkDeltaState + Debug
+{
     thread::spawn(move || loop {
         if let Ok(event) = receiver.recv() {
             match event {
                 // TODO: match every socket event type
                 SocketEvent::Packet(packet) if packet.addr() == server => {
-                    if let Ok(net_state) = bincode::deserialize::<T>(&packet.payload()) {
-                        let mut jit_buffer = jit_buffer.lock().unwrap();
-                        jit_buffer.push(net_state);
-                        jit_buffer.sort_by(|a, b| a.frame().cmp(&b.frame()));
+                    if let Ok(net_state) = bincode::deserialize::<ServerMessage<T>>(&packet.payload()) {
                         let mut ack = network_client_ack.lock().unwrap();
-                        ack.last_snapshot_frame = jit_buffer[jit_buffer.len() - 1].frame();
-                        ack.last_frame = jit_buffer[jit_buffer.len() - 1].frame();
+                        let mut jit_buffer = jit_buffer.lock().unwrap();
+                        match net_state {
+                            ServerMessage::Snapshot(snapshot) => {
+                                ack.last_snapshot_frame = snapshot.frame();
+                                ack.last_frame = snapshot.frame();
+                                
+                                let mut snapshots = snapshots.lock().unwrap();
+                                jit_buffer.push(snapshot.clone());
+                                if snapshots.len() == 2 {
+                                    //TODO: meh it works for now, fixed 2 length
+                                    if snapshots[0].frame() < snapshots[1].frame() {
+                                        snapshots[0] = snapshot
+                                    } else {
+                                        snapshots[1] = snapshot
+                                    }
+                                } else {
+                                    snapshots.push(snapshot);
+                                }
+                                
+                            },
+                            ServerMessage::Delta(delta) => {
+                                let snapshots = snapshots.lock().unwrap();
+                                ack.last_frame = delta.frame();
+                                //TODO: if we don't find the snapshot we should the save the delta to apply when we get the snapshot
+                                if let Some(snapshot) = snapshots.iter().find(|s| s.frame() == delta.snapshot_frame()) {
+                                    jit_buffer.push(snapshot.apply(&delta)); 
+                                }
+                            }
+                        }
+                        jit_buffer.sort_by(|a, b| a.frame().cmp(&b.frame()));
                     }                    
                 }
                 _ => {}
@@ -215,7 +260,11 @@ pub fn client_receive_network_system<T: 'static + DeserializeOwned + NetworkStat
     });
 }
 
-pub fn init_client_network<T: 'static + DeserializeOwned + NetworkState + Sync + Send>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind> {
+//TODO: pass types to NetworkState
+pub fn init_client_network<T>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind>
+    where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug, 
+        T::DeltaType: NetworkDeltaState + Debug
+{
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
     let net_id_mapping = NetworkIdMapping(HashMap::new());
@@ -226,10 +275,12 @@ pub fn init_client_network<T: 'static + DeserializeOwned + NetworkState + Sync +
     let network_client_ack = Arc::new(Mutex::new(NetworkClientAck { last_frame: 0, last_snapshot_frame: 0 }));
     let network_ack = NetworkAck(network_client_ack);
     let jit_buffer = JitBuffer(buffer);
+    let snapshots = ClientGameSnapshots(Arc::new(Mutex::new(vec![T::new(&world, 0)])));
     
-    client_receive_network_system::<T>(receiver, jit_buffer.0.clone(), network_ack.0.clone(), server);
+    client_receive_network_system::<T>(receiver, jit_buffer.0.clone(), snapshots.0.clone(), network_ack.0.clone(), server);
     let network_sender = NetworkSender::new(sender);
     world.add_unique(net_id_mapping);
+    world.add_unique(snapshots);
     world.add_unique(network_ack);
     world.add_unique(network_sender);
     world.add_unique(jit_buffer);
@@ -237,14 +288,32 @@ pub fn init_client_network<T: 'static + DeserializeOwned + NetworkState + Sync +
     Ok(())
 }
 
-pub fn update_server<T: NetworkState + Serialize>(world: &mut World, frame: u32) {
+pub struct GameSnapshot<T: 'static + Sync + Send + NetworkState + Serialize>(pub Arc<Mutex<T>>);
+pub struct ClientGameSnapshots<T: 'static + Sync + Send + NetworkState + Serialize>(pub Arc<Mutex<Vec<T>>>);
+
+pub fn update_server<T: 'static + Sync + Send + NetworkState + Serialize + Delta + Clone + Debug>(world: &mut World, frame: u32) {
     let net_state = T::new(&world, frame);
-    let game_encoded: Vec<u8> = bincode::serialize(&net_state).unwrap();
-    world.run(|client_list: UniqueView<ClientList>, mut transport: UniqueViewMut<TransportResource>| {
-        transport.messages.push_back(Message::new(
-            client_list.clients.lock().unwrap().clone(),
-            &game_encoded[..],
-            DeliveryRequirement::Unreliable));
+    
+    world.run(|client_list: UniqueView<ClientList>, mut transport: UniqueViewMut<TransportResource>, mut snapshot: UniqueViewMut<GameSnapshot<T>>, mut network_controller: UniqueViewMut<NetworkController>| {
+        network_controller.tick();
+        if network_controller.is_snapshot_frame() {
+            *snapshot.0.lock().unwrap() = net_state.clone();
+            let server_message = ServerMessage::<T>::Snapshot(net_state);
+            let payload = bincode::serialize(&server_message).unwrap();
+            transport.messages.push_back(Message::new(
+                client_list.clients.lock().unwrap().clone(),
+                &payload[..],
+                DeliveryRequirement::Unreliable));
+        } else {
+            let snapshot = snapshot.0.lock().unwrap();
+            let delta_packet = net_state.from(&snapshot);
+            let server_message = ServerMessage::<T>::Delta(delta_packet);
+            let payload = bincode::serialize(&server_message).unwrap();
+            transport.messages.push_back(Message::new(
+                client_list.clients.lock().unwrap().clone(),
+                &payload[..],
+                DeliveryRequirement::ReliableSequenced(Some(1))));
+        }
     });
     world.run(server_send_network_system);
 } 
