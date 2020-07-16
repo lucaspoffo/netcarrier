@@ -11,7 +11,7 @@ fn impl_network_delta(fields: &syn::punctuated::Punctuated<syn::Field, syn::toke
         let delta_name = syn::Ident::new(&format!("delta_{}", name), name.span()); 
 
         quote! {
-            let (#name, #delta_name) = ::netcarrier::get_delta_bitmask(&self.#name, &snapshot.#name, &self.entities_id, &snapshot.entities_id);
+            let (#name, #delta_name) = self.#name.get_delta_bitmask(&self.entities_id, &snapshot.#name, &snapshot.entities_id);
         }
     });
 
@@ -30,7 +30,7 @@ fn impl_network_delta(fields: &syn::punctuated::Punctuated<syn::Field, syn::toke
         let delta_name = syn::Ident::new(&format!("delta_{}", name), name.span()); 
 
         quote! {
-            let mut #name = ::netcarrier::apply_delta_bitmask(&delta.#delta_name, &self.#name, &delta.entities_id, &self.entities_id);
+            let mut #name = self.#name.apply_delta_bitmask(&self.entities_id, &delta.#delta_name, &delta.entities_id);
             #name.join(&delta.#name);
         }
     });
