@@ -322,6 +322,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "laminar",
+ "netcarrier",
+ "piston_window",
+ "rand",
+ "serde",
+ "shipyard",
+]
+
+[[package]]
 name = "dlib"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -781,7 +794,6 @@ dependencies = [
  "crossbeam-queue",
  "laminar",
  "mashup",
- "piston_window",
  "proc_macros",
  "rand",
  "serde",

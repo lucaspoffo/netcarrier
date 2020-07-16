@@ -1,8 +1,8 @@
-use super::make_network_state;
+use netcarrier::generate_packet;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::Delta;
+use netcarrier::Delta;
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 pub struct Color(pub [f32; 4]);
@@ -74,7 +74,12 @@ impl Rectangle {
     }
 }
 
-make_network_state!(positions: Position, velocities: Velocity);
+generate_packet!(struct Packet {
+    positions: Position,
+    velocities: Velocity,
+    colors: Color,
+    rectangles: Rectangle,
+});
 
 impl Delta for Position {
     type DeltaType = (f32, f32);

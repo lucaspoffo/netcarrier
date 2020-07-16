@@ -133,15 +133,18 @@ pub fn generate_packet(input: TokenStream) -> TokenStream {
     let impl_network_delta = impl_network_delta(fields);
 
     let expanded = quote! {
-        #[derive(::netcarrier::serde::Serialize, ::netcarrier::serde::Deserialize, PartialEq, Debug)]
-        struct NetworkPacket {
+        use ::netcarrier::shipyard::*;
+        use ::netcarrier::CarrierPacket;
+
+        #[derive(::netcarrier::serde::Serialize, ::netcarrier::serde::Deserialize, PartialEq, Debug, Clone)]
+        pub struct NetworkPacket {
             frame: u32,
             entities_id: Vec<u32>,
             #(#fields_type,)*
 		}
 		
-		#[derive(::netcarrier::serde::Serialize, ::netcarrier::serde::Deserialize, PartialEq, Debug)]
-        struct NetworkDeltaPacket {
+		#[derive(::netcarrier::serde::Serialize, ::netcarrier::serde::Deserialize, PartialEq, Debug, Clone)]
+        pub struct NetworkDeltaPacket {
             frame: u32,
             snapshot_frame: u32,
             entities_id: Vec<u32>,
@@ -149,12 +152,12 @@ pub fn generate_packet(input: TokenStream) -> TokenStream {
             #(#delta_fields_type,)*
         }
 
-        impl ::netcarrier::Packet for NetworkPacket {
+        impl ::netcarrier::CarrierPacket for NetworkPacket {
             fn frame(&self) -> u32 {
                 self.frame
             }
 
-            fn new(world: &::netcarrier::shipyard::World) -> Self {
+            fn new(world: &::netcarrier::shipyard::World, frame: u32) -> Self {
 				let mut entities_id = vec![];
 				world.run(|net_ids: ::netcarrier::shipyard::View<::netcarrier::NetworkIdentifier>| {
 					for net_id in net_ids.iter() {
@@ -163,8 +166,8 @@ pub fn generate_packet(input: TokenStream) -> TokenStream {
 				});
 				
 				NetworkPacket {
-                    frame: 0,
-                    entities_id: vec![],
+                    frame,
+                    entities_id: entities_id.clone(),
                     #(#fields_initialized,)*
                 }
             }
@@ -199,13 +202,13 @@ pub fn generate_packet(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl ::netcarrier::DeltaPacket for NetworkDeltaPacket {
+        impl ::netcarrier::CarrierDeltaPacket for NetworkDeltaPacket {
             fn frame(&self) -> u32 {
-                0
+                self.frame
             }
 
             fn snapshot_frame(&self) -> u32 {
-                0
+                self.snapshot_frame
             }
         }
 

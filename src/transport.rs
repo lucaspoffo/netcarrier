@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use super::{Delta, NetworkController, NetworkDeltaState, NetworkState};
+use super::{Delta, NetworkController, CarrierDeltaPacket, CarrierPacket};
 use bytes::Bytes;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use laminar::{ErrorKind, Packet, Socket, SocketEvent};
@@ -184,8 +184,8 @@ pub fn server_receive_network_system(
 
 pub fn init_network<T>(world: &mut World, server: &str) -> Result<(), ErrorKind>
 where
-    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug,
-    T::DeltaType: NetworkDeltaState + Debug,
+    T: 'static + DeserializeOwned + CarrierPacket + Sync + Send + Delta + Serialize + Clone + Debug,
+    T::DeltaType: CarrierDeltaPacket + Debug,
 {
     let mut socket = Socket::bind(server)?;
     let sender = socket.get_packet_sender();
@@ -233,8 +233,8 @@ pub fn client_receive_network_system<T>(
     network_client_ack: Arc<Mutex<NetworkClientAck>>,
     server: SocketAddr,
 ) where
-    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Clone + Debug,
-    T::DeltaType: NetworkDeltaState + Debug,
+    T: 'static + DeserializeOwned + CarrierPacket + Sync + Send + Delta + Clone + Debug,
+    T::DeltaType: CarrierDeltaPacket + Debug,
 {
     thread::spawn(move || loop {
         if let Ok(event) = receiver.recv() {
@@ -285,11 +285,11 @@ pub fn client_receive_network_system<T>(
     });
 }
 
-//TODO: pass types to NetworkState
+//TODO: pass types to Packet
 pub fn init_client_network<T>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind>
 where
-    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug,
-    T::DeltaType: NetworkDeltaState + Debug,
+    T: 'static + DeserializeOwned + CarrierPacket + Sync + Send + Delta + Serialize + Clone + Debug,
+    T::DeltaType: CarrierDeltaPacket + Debug,
 {
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
@@ -323,17 +323,14 @@ where
     Ok(())
 }
 
-pub struct GameSnapshot<T: 'static + Sync + Send + NetworkState + Serialize>(pub Arc<Mutex<T>>);
-pub struct ClientGameSnapshots<T: 'static + Sync + Send + NetworkState + Serialize>(
+pub struct GameSnapshot<T>(pub Arc<Mutex<T>>) 
+where T: 'static + Sync + Send + CarrierPacket + Serialize, T::DeltaType: CarrierDeltaPacket;
+pub struct ClientGameSnapshots<T>(
     pub Arc<Mutex<Vec<T>>>,
-);
+) where T: 'static + Sync + Send + CarrierPacket + Serialize, T::DeltaType: CarrierDeltaPacket;
 
-pub fn update_server<
-    T: 'static + Sync + Send + NetworkState + Serialize + Delta + Clone + Debug,
->(
-    world: &mut World,
-    frame: u32,
-) {
+pub fn update_server<T>(world: &mut World, frame: u32,) 
+where T: 'static + Sync + Send + CarrierPacket + Serialize + Clone, T::DeltaType: CarrierDeltaPacket {
     let net_state = T::new(&world, frame);
     world.run(
         |client_list: UniqueView<ClientList>,

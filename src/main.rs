@@ -53,11 +53,26 @@ fn setup_snapshot() -> NetworkPacket {
     }
 }
 
+fn empty_snapshot() -> NetworkPacket {
+    let entities_mask: BitVec<u32> = BitVec::new();
+    let values: Vec<Position> = vec![];
+    let network_bitmask = NetworkBitmask {
+        entities_mask,
+        values,
+    };
+
+    NetworkPacket {
+        frame: 0,
+        entities_id: vec![],
+        positions: network_bitmask,
+    }
+}
+
 fn main() {
-    let snapshot = setup_snapshot();
-    let mut state = setup_snapshot();
-    state.entities_id.push(2);
-    state.positions.add_value(Position::new(1.0, 1.0));
+    let snapshot = empty_snapshot();
+    let mut state = empty_snapshot();
+    // state.entities_id.push(2);
+    // state.positions.add_value(Position::new(1.0, 1.0));
 
     let delta_state = state.from(&snapshot);
     let applied_state = snapshot.apply(&delta_state);

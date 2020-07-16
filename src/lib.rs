@@ -10,7 +10,6 @@ use shipyard::*;
 #[macro_use]
 extern crate mashup;
 
-pub mod shared;
 pub mod transport;
 
 pub use proc_macros::generate_packet;
@@ -27,17 +26,17 @@ pub struct NetworkIdentifier {
     pub id: u32,
 }
 
-pub trait Packet
+pub trait CarrierPacket
 where
 	Self: Serialize + DeserializeOwned + Delta,
-	Self::DeltaType: DeltaPacket
+	Self::DeltaType: CarrierDeltaPacket
 {
 	fn frame(&self) -> u32;
-	fn new(world: &World) -> Self;
+	fn new(world: &World, frame: u32) -> Self;
 	fn apply_state(&self, world: &World);
 }
 
-pub trait DeltaPacket: Serialize + DeserializeOwned {
+pub trait CarrierDeltaPacket: Serialize + DeserializeOwned {
 	fn frame(&self) -> u32;
 	fn snapshot_frame(&self) -> u32;
 }

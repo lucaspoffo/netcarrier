@@ -5,8 +5,8 @@ use std::{thread, time};
 use laminar::ErrorKind;
 use shipyard::*;
 
-use netcarrier::shared::{ClientState, Color, NetworkPacket, Position, Rectangle, Velocity};
-use netcarrier::transport::{self, update_server, EventList, NetworkEvent};
+use demo::{ClientState, Color, NetworkPacket, Position, Rectangle, Velocity};
+use netcarrier::transport::{self, update_server, EventList, NetworkEvent, init_network};
 use netcarrier::{NetworkController, NetworkIdentifier};
 
 const MS_PER_FRAME: u64 = 50;
@@ -16,7 +16,7 @@ const SERVER: &str = "127.0.0.1:12351";
 pub fn init() -> Result<(), ErrorKind> {
     let mut world = World::default();
     let mut net_controller = NetworkController::new(40);
-    transport::init_network::<NetworkPacket>(&mut world, SERVER)?;
+    init_network::<NetworkPacket>(&mut world, SERVER)?;
     world.add_unique(ClientMapper::default());
 
     loop {

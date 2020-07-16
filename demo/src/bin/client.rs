@@ -7,8 +7,8 @@ use laminar::ErrorKind;
 use piston_window::*;
 use shipyard::*;
 
-use netcarrier::shared::{ClientState, Color, NetworkPacket, Position, Rectangle};
-use netcarrier::transport::{self, update_client, JitBuffer};
+use demo::{ClientState, Color, NetworkPacket, Position, Rectangle};
+use netcarrier::{CarrierPacket, transport::{self, update_client, JitBuffer}};
 
 const SERVER: &str = "127.0.0.1:12351";
 
@@ -34,6 +34,7 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
                     (&positions, &rectangles, &colors)
                         .iter()
                         .for_each(|(pos, rec, color)| {
+                            println!("Here");
                             rectangle(
                                 color.0,
                                 [
@@ -69,7 +70,7 @@ pub fn init(addr: &str) -> Result<(), ErrorKind> {
             }
         };
         update_client::<ClientState>(&mut world, client_state.clone(), server.clone());
-        world.run(process_events);
+        process_events(&world);
     }
 
     Ok(())
@@ -91,10 +92,10 @@ fn main() -> Result<(), laminar::ErrorKind> {
 }
 
 // TODO: this should be on our API side
-fn process_events(all_storages: AllStoragesViewMut) {
+fn process_events(world: &World) {
     let net_state: Option<NetworkPacket>;
     {
-        let jit_buffer = all_storages.borrow::<UniqueViewMut<JitBuffer<NetworkPacket>>>();
+        let jit_buffer = world.borrow::<UniqueViewMut<JitBuffer<NetworkPacket>>>();
         let mut jit_buffer = jit_buffer.0.lock().unwrap();
         println!("JitBuffer: {:?}", jit_buffer.len());
         // TODO: review how to define the size of the jit buffer (config, dynamic...)
@@ -104,6 +105,7 @@ fn process_events(all_storages: AllStoragesViewMut) {
         net_state = jit_buffer.pop();
     }
     if let Some(state) = net_state {
-        state.apply_state(all_storages);
+        println!("NetState: {:?}", state);
+        state.apply_state(&world);
     }
 }
