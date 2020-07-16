@@ -8,7 +8,7 @@ use piston_window::*;
 use shipyard::*;
 
 use netcarrier::shared::{ClientState, Color, NetworkPacket, Position, Rectangle};
-use netcarrier::transport::{self, JitBuffer, update_client};
+use netcarrier::transport::{self, update_client, JitBuffer};
 
 const SERVER: &str = "127.0.0.1:12351";
 

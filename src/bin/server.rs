@@ -5,10 +5,8 @@ use std::{thread, time};
 use laminar::ErrorKind;
 use shipyard::*;
 
-use netcarrier::shared::{ClientState, Color, Position, Rectangle, Velocity, NetworkPacket};
-use netcarrier::transport::{
-    self, EventList, NetworkEvent, update_server
-};
+use netcarrier::shared::{ClientState, Color, NetworkPacket, Position, Rectangle, Velocity};
+use netcarrier::transport::{self, update_server, EventList, NetworkEvent};
 use netcarrier::{NetworkController, NetworkIdentifier};
 
 const MS_PER_FRAME: u64 = 50;
@@ -49,6 +47,12 @@ fn system_move(mut posisitons: ViewMut<Position>, velocities: View<Velocity>) {
         // println!("{:?}", pos);
     }
 }
+
+// fn update_color(mut posisitons: ViewMut<Color>) {
+//     for (color) in (&mut posisitons).iter() {
+
+//     }
+// }
 
 fn system_update_player(clients_state: View<ClientState>, mut velocities: ViewMut<Velocity>) {
     for (state, velocity) in (&clients_state, &mut velocities).iter() {

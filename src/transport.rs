@@ -1,31 +1,35 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::collections::HashMap;
-use std::fmt::Debug;
 
+use super::{Delta, NetworkController, NetworkDeltaState, NetworkState};
 use bytes::Bytes;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use laminar::{ErrorKind, Packet, Socket, SocketEvent};
-use shipyard::*;
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use super::{NetworkState, Delta, NetworkController, NetworkDeltaState};
+use serde::{Deserialize, Serialize};
+use shipyard::*;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Message {
     pub destination: Vec<SocketAddr>,
     pub payload: Bytes,
-    pub delivery: DeliveryRequirement
+    pub delivery: DeliveryRequirement,
 }
 
 impl Message {
-    pub fn new(destination: Vec<SocketAddr>, payload: &[u8], delivery: DeliveryRequirement) -> Self {
+    pub fn new(
+        destination: Vec<SocketAddr>,
+        payload: &[u8],
+        delivery: DeliveryRequirement,
+    ) -> Self {
         Self {
             destination,
             payload: Bytes::copy_from_slice(payload),
-            delivery
+            delivery,
         }
     }
 }
@@ -64,8 +68,8 @@ pub struct NetworkIdMapping(pub HashMap<u32, EntityId>);
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkClientState {
-	ack: NetworkClientAck,
-	state: Vec<u8>
+    ack: NetworkClientAck,
+    state: Vec<u8>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -81,7 +85,7 @@ pub enum DeliveryRequirement {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NetworkClientAck {
     last_frame: u32,
-	last_snapshot_frame: u32,
+    last_snapshot_frame: u32,
 }
 
 pub struct NetworkAck(pub Arc<Mutex<NetworkClientAck>>);
@@ -96,17 +100,23 @@ pub fn client_send_network_system(
         for &destination in &message.destination {
             let net_state = NetworkClientState {
                 ack: ack.clone(),
-                state: message.payload.to_vec()
+                state: message.payload.to_vec(),
             };
             let payload = bincode::serialize(&net_state).unwrap();
             let packet = match message.delivery {
                 DeliveryRequirement::Reliable => Packet::reliable_unordered(destination, payload),
                 DeliveryRequirement::Unreliable => Packet::unreliable(destination, payload),
-                DeliveryRequirement::UnreliableSequenced(stream_id) => Packet::unreliable_sequenced(destination, payload, stream_id),
-                DeliveryRequirement::ReliableSequenced(stream_id) => Packet::reliable_sequenced(destination, payload, stream_id),
-                DeliveryRequirement::ReliableOrdered(stream_id) => Packet::reliable_ordered(destination, payload, stream_id),
+                DeliveryRequirement::UnreliableSequenced(stream_id) => {
+                    Packet::unreliable_sequenced(destination, payload, stream_id)
+                }
+                DeliveryRequirement::ReliableSequenced(stream_id) => {
+                    Packet::reliable_sequenced(destination, payload, stream_id)
+                }
+                DeliveryRequirement::ReliableOrdered(stream_id) => {
+                    Packet::reliable_ordered(destination, payload, stream_id)
+                }
             };
-                
+
             if let Err(SendError(e)) = network.sender.send(packet) {
                 println!("Send Error sending message: {:?}", e);
             }
@@ -121,6 +131,7 @@ pub fn server_send_network_system(
 ) {
     for message in &transport.messages {
         for &destination in &message.destination {
+            println!("{}", message.payload.len());
             let packet = Packet::reliable_unordered(destination, message.payload.to_vec());
             if let Err(SendError(e)) = network.sender.send(packet) {
                 println!("Send Error sending message: {:?}", e);
@@ -139,9 +150,14 @@ pub fn server_receive_network_system(
         if let Ok(event) = receiver.recv() {
             let event = match event {
                 SocketEvent::Packet(packet) => {
-                    if let Ok(net_client_state) = bincode::deserialize::<NetworkClientState>(&packet.payload()) {
+                    if let Ok(net_client_state) =
+                        bincode::deserialize::<NetworkClientState>(&packet.payload())
+                    {
                         // println!("Client {}, last_received frame: {}", packet.addr(), net_client_state.ack.last_frame);
-                        NetworkEvent::Message(packet.addr(), Bytes::copy_from_slice(&net_client_state.state))
+                        NetworkEvent::Message(
+                            packet.addr(),
+                            Bytes::copy_from_slice(&net_client_state.state),
+                        )
                     } else {
                         break;
                     }
@@ -166,9 +182,10 @@ pub fn server_receive_network_system(
     event_receiver
 }
 
-pub fn init_network<T>(world: &mut World, server: &str) -> Result<(), ErrorKind> 
-    where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug, 
-        T::DeltaType: NetworkDeltaState + Debug 
+pub fn init_network<T>(world: &mut World, server: &str) -> Result<(), ErrorKind>
+where
+    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug,
+    T::DeltaType: NetworkDeltaState + Debug,
 {
     let mut socket = Socket::bind(server)?;
     let sender = socket.get_packet_sender();
@@ -201,9 +218,12 @@ pub fn init_network<T>(world: &mut World, server: &str) -> Result<(), ErrorKind>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum ServerMessage<T> where T: Delta {
+pub enum ServerMessage<T>
+where
+    T: Delta,
+{
     Snapshot(T),
-    Delta(T::DeltaType)
+    Delta(T::DeltaType),
 }
 
 pub fn client_receive_network_system<T>(
@@ -212,22 +232,25 @@ pub fn client_receive_network_system<T>(
     snapshots: Arc<Mutex<Vec<T>>>,
     network_client_ack: Arc<Mutex<NetworkClientAck>>,
     server: SocketAddr,
-) where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Clone + Debug, 
-        T::DeltaType: NetworkDeltaState + Debug
+) where
+    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Clone + Debug,
+    T::DeltaType: NetworkDeltaState + Debug,
 {
     thread::spawn(move || loop {
         if let Ok(event) = receiver.recv() {
             match event {
                 // TODO: match every socket event type
                 SocketEvent::Packet(packet) if packet.addr() == server => {
-                    if let Ok(net_state) = bincode::deserialize::<ServerMessage<T>>(&packet.payload()) {
+                    if let Ok(net_state) =
+                        bincode::deserialize::<ServerMessage<T>>(&packet.payload())
+                    {
                         let mut ack = network_client_ack.lock().unwrap();
                         let mut jit_buffer = jit_buffer.lock().unwrap();
                         match net_state {
                             ServerMessage::Snapshot(snapshot) => {
                                 ack.last_snapshot_frame = snapshot.frame();
                                 ack.last_frame = snapshot.frame();
-                                
+
                                 let mut snapshots = snapshots.lock().unwrap();
                                 jit_buffer.push(snapshot.clone());
                                 if snapshots.len() == 2 {
@@ -240,19 +263,21 @@ pub fn client_receive_network_system<T>(
                                 } else {
                                     snapshots.push(snapshot);
                                 }
-                                
-                            },
+                            }
                             ServerMessage::Delta(delta) => {
                                 let snapshots = snapshots.lock().unwrap();
                                 ack.last_frame = delta.frame();
                                 //TODO: if we don't find the snapshot we should the save the delta to apply when we get the snapshot
-                                if let Some(snapshot) = snapshots.iter().find(|s| s.frame() == delta.snapshot_frame()) {
-                                    jit_buffer.push(snapshot.apply(&delta)); 
+                                if let Some(snapshot) = snapshots
+                                    .iter()
+                                    .find(|s| s.frame() == delta.snapshot_frame())
+                                {
+                                    jit_buffer.push(snapshot.apply(&delta));
                                 }
                             }
                         }
                         jit_buffer.sort_by(|a, b| a.frame().cmp(&b.frame()));
-                    }                    
+                    }
                 }
                 _ => {}
             };
@@ -262,8 +287,9 @@ pub fn client_receive_network_system<T>(
 
 //TODO: pass types to NetworkState
 pub fn init_client_network<T>(world: &mut World, addr: &str, server: &str) -> Result<(), ErrorKind>
-    where T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug, 
-        T::DeltaType: NetworkDeltaState + Debug
+where
+    T: 'static + DeserializeOwned + NetworkState + Sync + Send + Delta + Serialize + Clone + Debug,
+    T::DeltaType: NetworkDeltaState + Debug,
 {
     let mut socket = Socket::bind(addr)?;
     let server = server.parse().unwrap();
@@ -272,12 +298,21 @@ pub fn init_client_network<T>(world: &mut World, addr: &str, server: &str) -> Re
     let receiver = socket.get_event_receiver();
     let _thread = thread::spawn(move || socket.start_polling());
     let buffer: Arc<Mutex<Vec<T>>> = Arc::new(Mutex::new(vec![]));
-    let network_client_ack = Arc::new(Mutex::new(NetworkClientAck { last_frame: 0, last_snapshot_frame: 0 }));
+    let network_client_ack = Arc::new(Mutex::new(NetworkClientAck {
+        last_frame: 0,
+        last_snapshot_frame: 0,
+    }));
     let network_ack = NetworkAck(network_client_ack);
     let jit_buffer = JitBuffer(buffer);
     let snapshots = ClientGameSnapshots(Arc::new(Mutex::new(vec![T::new(&world, 0)])));
-    
-    client_receive_network_system::<T>(receiver, jit_buffer.0.clone(), snapshots.0.clone(), network_ack.0.clone(), server);
+
+    client_receive_network_system::<T>(
+        receiver,
+        jit_buffer.0.clone(),
+        snapshots.0.clone(),
+        network_ack.0.clone(),
+        server,
+    );
     let network_sender = NetworkSender::new(sender);
     world.add_unique(net_id_mapping);
     world.add_unique(snapshots);
@@ -289,41 +324,58 @@ pub fn init_client_network<T>(world: &mut World, addr: &str, server: &str) -> Re
 }
 
 pub struct GameSnapshot<T: 'static + Sync + Send + NetworkState + Serialize>(pub Arc<Mutex<T>>);
-pub struct ClientGameSnapshots<T: 'static + Sync + Send + NetworkState + Serialize>(pub Arc<Mutex<Vec<T>>>);
+pub struct ClientGameSnapshots<T: 'static + Sync + Send + NetworkState + Serialize>(
+    pub Arc<Mutex<Vec<T>>>,
+);
 
-pub fn update_server<T: 'static + Sync + Send + NetworkState + Serialize + Delta + Clone + Debug>(world: &mut World, frame: u32) {
+pub fn update_server<
+    T: 'static + Sync + Send + NetworkState + Serialize + Delta + Clone + Debug,
+>(
+    world: &mut World,
+    frame: u32,
+) {
     let net_state = T::new(&world, frame);
-    
-    world.run(|client_list: UniqueView<ClientList>, mut transport: UniqueViewMut<TransportResource>, mut snapshot: UniqueViewMut<GameSnapshot<T>>, mut network_controller: UniqueViewMut<NetworkController>| {
-        network_controller.tick();
-        if network_controller.is_snapshot_frame() {
-            *snapshot.0.lock().unwrap() = net_state.clone();
-            let server_message = ServerMessage::<T>::Snapshot(net_state);
-            let payload = bincode::serialize(&server_message).unwrap();
-            transport.messages.push_back(Message::new(
-                client_list.clients.lock().unwrap().clone(),
-                &payload[..],
-                DeliveryRequirement::Unreliable));
-        } else {
-            let snapshot = snapshot.0.lock().unwrap();
-            let delta_packet = net_state.from(&snapshot);
-            let server_message = ServerMessage::<T>::Delta(delta_packet);
-            let payload = bincode::serialize(&server_message).unwrap();
-            transport.messages.push_back(Message::new(
-                client_list.clients.lock().unwrap().clone(),
-                &payload[..],
-                DeliveryRequirement::ReliableSequenced(Some(1))));
-        }
-    });
+    world.run(
+        |client_list: UniqueView<ClientList>,
+         mut transport: UniqueViewMut<TransportResource>,
+         mut snapshot: UniqueViewMut<GameSnapshot<T>>,
+         mut network_controller: UniqueViewMut<NetworkController>| {
+            network_controller.tick();
+            if network_controller.is_snapshot_frame() {
+                *snapshot.0.lock().unwrap() = net_state.clone();
+                let server_message = ServerMessage::<T>::Snapshot(net_state);
+                let payload = bincode::serialize(&server_message).unwrap();
+                println!("Netpacket len: {:?}", payload.len());
+                transport.messages.push_back(Message::new(
+                    client_list.clients.lock().unwrap().clone(),
+                    &payload[..],
+                    DeliveryRequirement::Unreliable,
+                ));
+            } else {
+                let snapshot = snapshot.0.lock().unwrap();
+                let delta_packet = net_state.from(&snapshot);
+                let server_message = ServerMessage::<T>::Delta(delta_packet);
+                let payload = bincode::serialize(&server_message).unwrap();
+                println!("Netpacket len: {:?}", payload.len());
+                transport.messages.push_back(Message::new(
+                    client_list.clients.lock().unwrap().clone(),
+                    &payload[..],
+                    DeliveryRequirement::ReliableSequenced(Some(1)),
+                ));
+            }
+        },
+    );
     world.run(server_send_network_system);
-} 
+}
 
 pub fn update_client<T: Serialize>(world: &mut World, client_state: T, server: SocketAddr) {
     let encoded_client: Vec<u8> = bincode::serialize(&client_state).unwrap();
     world.run(|mut transport: UniqueViewMut<TransportResource>| {
-        transport
-            .messages
-            .push_back(Message::new(vec![server], &encoded_client, DeliveryRequirement::Unreliable));
+        transport.messages.push_back(Message::new(
+            vec![server],
+            &encoded_client,
+            DeliveryRequirement::Unreliable,
+        ));
     });
     world.run(client_send_network_system);
-} 
+}

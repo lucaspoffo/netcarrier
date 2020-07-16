@@ -74,7 +74,7 @@ impl Rectangle {
     }
 }
 
-make_network_state!(positions: Position, colors: Color, rectangles: Rectangle);
+make_network_state!(positions: Position, velocities: Velocity);
 
 impl Delta for Position {
     type DeltaType = (f32, f32);
@@ -84,7 +84,25 @@ impl Delta for Position {
     }
 
     fn apply(&self, delta: &Self::DeltaType) -> Position {
-        Position { x: delta.0, y: delta.1 }
+        Position {
+            x: delta.0,
+            y: delta.1,
+        }
+    }
+}
+
+impl Delta for Velocity {
+    type DeltaType = (f32, f32);
+
+    fn from(&self, other: &Velocity) -> (f32, f32) {
+        (other.dx, other.dy)
+    }
+
+    fn apply(&self, delta: &Self::DeltaType) -> Velocity {
+        Velocity {
+            dx: delta.0,
+            dy: delta.1,
+        }
     }
 }
 
@@ -96,7 +114,10 @@ impl Delta for Rectangle {
     }
 
     fn apply(&self, delta: &Self::DeltaType) -> Rectangle {
-        Rectangle { width: delta.0, height: delta.1 }
+        Rectangle {
+            width: delta.0,
+            height: delta.1,
+        }
     }
 }
 
