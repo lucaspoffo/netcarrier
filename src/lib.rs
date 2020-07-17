@@ -57,7 +57,7 @@ pub trait NetworkDeltaState {
 pub trait Delta {
     type DeltaType: Serialize + DeserializeOwned;
 
-    fn from(&self, other: &Self) -> Self::DeltaType;
+    fn from(&self, other: &Self) -> Option<Self::DeltaType>;
     fn apply(&self, other: &Self::DeltaType) -> Self;
 }
 
@@ -152,9 +152,13 @@ where
                 Some(snapshot_index) => {
                     let snapshot_component = &snapshot.values[snapshot_index];
                     let current_component = &self.values[i];
-                    let delta = snapshot_component.from(current_component);
-                    delta_mask_element.set(i, true);
-                    delta_element.push(delta);
+                    if let Some(delta) = snapshot_component.from(current_component) {
+                        delta_mask_element.set(i, true);
+                        delta_element.push(delta);
+                    } else {
+                        mask_element.set(i, true);
+                        element.push(current_component.clone());
+                    }
                 },
                 None => {
                     let current_component = self.values[i].clone();

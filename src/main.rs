@@ -24,8 +24,8 @@ pub struct DeltaPosition {
 impl Delta for Position {
     type DeltaType = DeltaPosition;
 
-    fn from(&self, _other: &Position) -> DeltaPosition {
-        DeltaPosition { x: 0, y: 0 }
+    fn from(&self, _other: &Position) -> Option<DeltaPosition> {
+        Some(DeltaPosition { x: 0, y: 0 })
     }
 
     fn apply(&self, _other: &Self::DeltaType) -> Position {
@@ -74,7 +74,7 @@ fn main() {
     // state.entities_id.push(2);
     // state.positions.add_value(Position::new(1.0, 1.0));
 
-    let delta_state = state.from(&snapshot);
+    let delta_state = state.from(&snapshot).unwrap();
     let applied_state = snapshot.apply(&delta_state);
     assert_eq!(applied_state, state);
     println!("{:?}", applied_state);

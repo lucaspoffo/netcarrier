@@ -350,7 +350,7 @@ where T: 'static + Sync + Send + CarrierPacket + Serialize + Clone, T::DeltaType
                 ));
             } else {
                 let snapshot = snapshot.0.lock().unwrap();
-                let delta_packet = net_state.from(&snapshot);
+                let delta_packet = net_state.from(&snapshot).unwrap();
                 let server_message = ServerMessage::<T>::Delta(delta_packet);
                 let payload = bincode::serialize(&server_message).unwrap();
                 println!("Netpacket len: {:?}", payload.len());

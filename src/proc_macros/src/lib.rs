@@ -45,15 +45,15 @@ fn impl_network_delta(fields: &syn::punctuated::Punctuated<syn::Field, syn::toke
         impl ::netcarrier::Delta for NetworkPacket {
             type DeltaType = NetworkDeltaPacket;
 
-            fn from(&self, snapshot: &Self) -> Self::DeltaType {
+            fn from(&self, snapshot: &Self) -> Option<Self::DeltaType> {
                 #(#get_delta_bitmask)*
 
-                NetworkDeltaPacket {
+                Some(NetworkDeltaPacket {
                     frame: self.frame(),
                     snapshot_frame: snapshot.frame(),
                     entities_id: self.entities_id.clone(),
                     #(#fields_delta_name)*
-                }
+                })
             }
 
             fn apply(&self, delta: &Self::DeltaType) -> Self {

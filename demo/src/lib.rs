@@ -82,58 +82,84 @@ generate_packet!(struct Packet {
 });
 
 impl Delta for Position {
-    type DeltaType = (f32, f32);
+    type DeltaType = (i8, i8);
 
-    fn from(&self, other: &Position) -> (f32, f32) {
-        (other.x, other.y)
+    fn from(&self, other: &Position) -> Option<Self::DeltaType> {
+        let x = try_f32_to_i8(self.x - other.x);
+        let y = try_f32_to_i8(self.y - other.y);
+        if x.is_none() || y.is_none() {
+            return None;
+        }
+        Some((x.unwrap(), y.unwrap()))
     }
 
     fn apply(&self, delta: &Self::DeltaType) -> Position {
         Position {
-            x: delta.0,
-            y: delta.1,
+            x: self.x - delta.0 as f32,
+            y: self.y - delta.1 as f32,
         }
     }
 }
 
 impl Delta for Velocity {
-    type DeltaType = (f32, f32);
+    type DeltaType = (i8, i8);
 
-    fn from(&self, other: &Velocity) -> (f32, f32) {
-        (other.dx, other.dy)
+    fn from(&self, other: &Self) -> Option<Self::DeltaType> {
+        let x = try_f32_to_i8(self.dx - other.dx);
+        let y = try_f32_to_i8(self.dy - other.dy);
+        if x.is_none() || y.is_none() {
+            return None;
+        }
+        Some((x.unwrap(), y.unwrap()))
     }
 
-    fn apply(&self, delta: &Self::DeltaType) -> Velocity {
+    fn apply(&self, delta: &Self::DeltaType) -> Self {
         Velocity {
-            dx: delta.0,
-            dy: delta.1,
+            dx: self.dx - delta.0 as f32,
+            dy: self.dy - delta.1 as f32,
         }
     }
 }
 
 impl Delta for Rectangle {
-    type DeltaType = (f32, f32);
+    type DeltaType = ();
 
-    fn from(&self, other: &Rectangle) -> Self::DeltaType {
-        (other.width, other.height)
+    fn from(&self, other: &Rectangle) -> Option<Self::DeltaType> {
+        if other.width != self.width || other.height != self.height {
+            None
+        } else {
+            Some(())
+        }
     }
 
-    fn apply(&self, delta: &Self::DeltaType) -> Rectangle {
+    fn apply(&self, _delta: &Self::DeltaType) -> Rectangle {
         Rectangle {
-            width: delta.0,
-            height: delta.1,
+            width: self.width,
+            height: self.height,
         }
     }
 }
 
 impl Delta for Color {
-    type DeltaType = [f32; 4];
+    type DeltaType = ();
 
-    fn from(&self, other: &Color) -> Self::DeltaType {
-        other.0
+    fn from(&self, other: &Color) -> Option<Self::DeltaType> {
+        if self.0 != other.0 {
+            Some(())
+        } else {
+            None
+        }
     }
 
-    fn apply(&self, delta: &Self::DeltaType) -> Color {
-        Color(*delta)
+    fn apply(&self, _delta: &Self::DeltaType) -> Color {
+        *self
+    }
+}
+
+fn try_f32_to_i8(x: f32) -> Option<i8> {
+    if x < (i8::MAX as f32) && x >= (i8::MIN as f32) {
+        Some(x as i8)
+    } else {
+        None
     }
 }
